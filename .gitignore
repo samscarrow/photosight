@@ -1,0 +1,108 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Local development
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Processing output directories
+test_output/
+test_input/
+batch_demo/
+batch_demo_live/
+iterative_demo/
+live_demo/
+raw_processing_demo/
+scene_aware_demo/
+blur_analysis_output/
+test_raw_processing/
+photos_library_test/
+
+# Processing files
+*.log
+processing.log
+*.jpg
+*.jpeg
+*.png
+*.arw
+*.ARW
+*.dng
+*.DNG
+*.raw
+*.RAW
+
+# Results and cache files
+*.json
+!config.yaml
+!config_test.yaml
+!baseline_metrics_template.json
+
+# Temporary files
+*.txt
+!requirements.txt
+!requirements-ai.txt
+
+# Model files
+*.pt
+yolov8n.pt
+
+# Session files
+2025-*.txt
+
+# Markdown files (keep only essential ones)
+*.md
+!README.md
+!QUICKSTART.md
+
+# Python version
+.python-version

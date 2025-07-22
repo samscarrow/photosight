@@ -1,0 +1,246 @@
+# PhotoSight Default Configuration
+# Adjust these values based on your Phase 0 baseline research
+
+# File protection settings
+protection:
+  enable_protection: true         # Protect source files during analysis
+  verify_checksums: true         # Verify file integrity after operations
+  read_only_mode: true          # Make files read-only during processing
+  create_backups: false         # Create backups before operations
+
+# Technical filtering thresholds (Stage 1)
+technical_filters:
+  # Sharpness detection
+  sharpness:
+    # Minimum Laplacian variance to consider image sharp
+    laplacian_variance_minimum: 65.0  # Raised to catch uniform blur
+    # Whether to save sharpness heatmaps for debugging
+    save_debug_heatmaps: false
+    # Region-based analysis
+    use_region_based_analysis: true
+    center_region_weight: 0.7
+    edge_region_weight: 0.3
+    # Gradient-based analysis
+    use_gradient_analysis: true
+    gradient_variance_minimum: 100.0
+    # Uniform blur detection
+    variance_uniformity_threshold: 0.25
+    detect_uniform_blur: true
+    # Subject and motion detection
+    subject_focus_priority: true
+    motion_blur_detection: true
+    # Two-pass blur recovery settings
+    enable_blur_recovery: true
+    blur_recovery_threshold: 40.0  # Lower threshold for subject-focused recovery
+    subject_focus_overlap_threshold: 0.3  # Minimum overlap ratio for recovery
+  
+  # Exposure analysis
+  exposure:
+    # Maximum percentage of pixels allowed to be pure black (0)
+    histogram_black_clip_threshold: 0.01  # 1%
+    # Maximum percentage of pixels allowed to be pure white (255)
+    histogram_white_clip_threshold: 0.01  # 1%
+    # Number of histogram bins for analysis
+    histogram_bins: 256
+    # Overall brightness thresholds
+    minimum_mean_brightness: 40   # Out of 255 (15.7%) - reduced from 50
+    maximum_mean_brightness: 215  # Out of 255 (84.3%) - increased from 205
+    # Shadow/highlight distribution thresholds
+    maximum_shadow_percentage: 0.8   # 80% - increased from 70% to be less strict
+    minimum_highlight_percentage: 0.005  # 0.5% - reduced from 1% to be less strict
+  
+  # Metadata filters
+  metadata:
+    # Maximum acceptable ISO before rejection
+    maximum_iso: 12800
+    # Minimum shutter speed (as fraction, e.g., 1/60)
+    minimum_shutter_speed_denominator: 60
+    # Apply 1/focal_length rule for shutter speed
+    apply_focal_length_rule: true
+    # Multiplier for focal length rule (1.5 for crop sensor)
+    focal_length_rule_multiplier: 1.0
+
+# Output organization
+output:
+  # Folder structure under output directory
+  folders:
+    accepted: "accepted"
+    rejected: "rejected"
+    # Subfolders for different rejection reasons
+    rejection_reasons:
+      blurry: "rejected/blurry"
+      underexposed: "rejected/underexposed" 
+      overexposed: "rejected/overexposed"
+      high_iso: "rejected/high_iso"
+      slow_shutter: "rejected/slow_shutter"
+      # AI rejection reasons
+      ai_low_ai_score: "rejected/ai_low_score"
+      ai_eyes_closed: "rejected/ai_eyes_closed"
+      ai_poor_face_quality: "rejected/ai_poor_face"
+      ai_poor_balance: "rejected/ai_poor_balance"
+  
+  # Whether to preserve folder structure from input
+  preserve_folder_structure: true
+  
+  # Copy or move files
+  operation: "copy"  # "copy" or "move"
+  
+  # Whether to include sidecar files (.xmp)
+  include_sidecar_files: true
+
+# Processing options
+processing:
+  # Number of threads for parallel processing
+  num_threads: 4
+  # Batch size for processing
+  batch_size: 10
+  # Whether to skip already processed files
+  skip_existing: true
+  # File extensions to process
+  raw_extensions:
+    - ".ARW"
+    - ".arw"
+
+# AI Curation settings (Stage 2)
+ai_curation:
+  # Enable AI-based curation
+  enabled: true  # Set to true to enable AI curation
+  
+  # Component toggles
+  enable_person_detection: true
+  enable_face_analysis: true
+  enable_composition_analysis: true
+  
+  # Model configuration
+  yolo_model: "yolov8n.pt"  # Options: yolov8n.pt, yolov8s.pt, yolov8m.pt, yolov8l.pt
+  person_confidence: 0.5     # Minimum confidence for person detection
+  face_confidence: 0.5       # Minimum confidence for face detection
+  
+  # AI scoring thresholds
+  min_ai_score: 0.4          # Minimum overall AI score to accept (reduced from 0.5)
+  
+  # Component weights for final score
+  person_weight: 0.3         # Weight for person detection/composition
+  face_weight: 0.3           # Weight for face quality
+  composition_weight: 0.4    # Weight for general composition
+  
+  # Rejection settings
+  reject_eyes_closed: true   # Reject portraits with closed eyes
+  reject_poor_face_quality: true  # Reject if face quality < 0.3
+  reject_poor_balance: true  # Reject if visual balance < 0.3
+
+# Similarity detection and duplicate removal (Stage 3)
+similarity:
+  # Enable similarity detection
+  enable_similarity_detection: true
+  
+  # Similarity threshold (0-1, where 1 is identical)
+  similarity_threshold: 0.99
+  
+  # Hash size for perceptual hashing (larger = more precise)
+  hash_size: 16
+  
+  # Enable metadata fingerprinting for pre-filtering
+  enable_metadata_check: true
+  
+  # Duplicate handling
+  auto_reject_duplicates: true     # Automatically move duplicates to rejected folder
+  create_duplicate_links: false    # Create symbolic link groups for manual review
+  
+  # Selection criteria weights (must sum to 1.0)
+  technical_weight: 0.4            # Technical quality (ISO, exposure, focus)
+  ai_weight: 0.3                   # AI curation score
+  sharpness_weight: 0.2            # Sharpness/focus quality
+  heuristics_weight: 0.1           # Preference heuristics (expressions, sequence position)
+
+# RAW Post-Processing Pipeline (Stage 4)
+raw_processing:
+  # Enable RAW post-processing
+  enabled: true
+  
+  # Preview generation settings
+  preview:
+    size: 800              # Maximum dimension for preview images
+    quality: 85            # JPEG quality for previews (1-100)
+    cache_enabled: true    # Cache previews for faster iteration
+  
+  # Geometry corrections
+  auto_straighten:
+    enabled: true
+    confidence_threshold: 0.7    # Minimum confidence to auto-straighten
+    max_rotation_degrees: 10.0   # Maximum rotation to apply
+    edge_fill_method: "reflect"  # "reflect", "replicate", or "constant"
+  
+  intelligent_crop:
+    enabled: true
+    preserve_subjects: true      # Don't crop out detected people/faces
+    default_aspect_ratio: "original"  # "original", "3:2", "4:3", "16:9", "1:1", "4:5"
+    composition_enhance: true    # Apply rule of thirds positioning
+    min_subject_margin: 0.1      # Minimum margin around subjects (0-1)
+    
+  # Exposure optimization
+  exposure:
+    auto_optimize: true
+    lift_shadows: true
+    recover_highlights: true
+    target_histogram_spread: 0.85    # Target histogram coverage (0-1)
+    preserve_mood: true              # Don't over-correct creative exposure
+    
+  # Color enhancement
+  color:
+    auto_white_balance: false        # Use scene-adaptive WB
+    enhance_vibrance: true
+    default_vibrance_amount: 20      # 0-100
+    protect_skin_tones: true
+    creative_grading: false          # Apply artistic color grading
+    
+  # Detail enhancement
+  detail:
+    capture_sharpening: true
+    default_sharpening_amount: 50    # 0-150
+    noise_reduction_auto: true       # Auto-detect noise levels
+    clarity_enhancement: true
+    
+  # Output settings
+  output:
+    format: "jpeg"                   # "jpeg", "tiff", "png"
+    jpeg_quality: 95                 # Quality for JPEG export (1-100)
+    bit_depth: 8                     # 8 or 16 bit
+    color_space: "sRGB"              # "sRGB", "ProPhotoRGB", "AdobeRGB"
+    embed_profile: true              # Embed color profile
+    preserve_metadata: true          # Keep EXIF data
+    
+  # Recipe management
+  recipes:
+    save_with_output: true           # Save .recipe.json with each export
+    auto_save_iterations: true       # Save intermediate recipes
+    recipe_directory: "./recipes"    # Directory for recipe storage
+
+# Database configuration
+database:
+  # Enable database integration
+  enabled: false
+  # PostgreSQL connection URL
+  url: "postgresql://username:password@localhost:5432/photosight"
+  # Connection pool settings
+  pool_size: 10
+  max_overflow: 20
+  pool_timeout: 30
+  # Echo SQL queries for debugging
+  echo_sql: false
+  # Auto-initialize database schema
+  auto_init: true
+  # MCP server settings
+  mcp_server:
+    enabled: false
+    port: 8080
+    read_only_user: "photosight_reader"
+
+# Logging
+logging:
+  # Log level: DEBUG, INFO, WARNING, ERROR
+  level: "INFO"
+  # Whether to save log to file
+  save_to_file: true
+  # Log file location
+  log_file: "photosight.log"
