@@ -86,6 +86,9 @@ processing.log
 !config.yaml
 !config_test.yaml
 !baseline_metrics_template.json
+!package.json
+!package-lock.json
+!railway.json
 
 # Temporary files
 *.txt
@@ -103,6 +106,8 @@ yolov8n.pt
 *.md
 !README.md
 !QUICKSTART.md
+!.claude/commands/*.md
+!GIT-ARCHITECTURE-SUMMARY.md
 
 # Python version
 .python-version
