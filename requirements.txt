@@ -1,0 +1,25 @@
+# PhotoSight MVP Requirements
+# Minimal dependencies for Milestone 1 (Technical Culling)
+
+# Core image processing
+rawpy>=0.18.1              # For reading Sony .ARW RAW files
+numpy>=1.24.0              # Numerical operations
+opencv-python>=4.8.0       # Computer vision (histograms, sharpness)
+Pillow>=10.0.0            # General image manipulation
+
+# Metadata handling
+PyExifTool>=0.5.5         # For reading EXIF data (requires system ExifTool)
+
+# CLI and configuration
+click>=8.1.0              # Command-line interface framework
+PyYAML>=6.0               # YAML configuration files
+tqdm>=4.65.0              # Progress bars
+
+# Database integration (optional)
+sqlalchemy>=2.0.0         # ORM for database operations
+psycopg2-binary>=2.9.0    # PostgreSQL adapter
+alembic>=1.12.0           # Database migrations
+
+# Development and testing
+pytest>=7.4.0             # Testing framework
+pytest-cov>=4.1.0         # Test coverage
