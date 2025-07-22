@@ -1,0 +1,149 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to review'
+        required: true
+        type: string
+
+jobs:
+  claude-review:
+    runs-on: ubuntu-latest
+    if: github.actor != 'dependabot[bot]'
+    
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: |
+          npm install @anthropic-ai/sdk dotenv
+          
+      - name: Install GitHub CLI
+        run: |
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt update
+          sudo apt install gh
+      
+      - name: Configure Git
+        run: |
+          git config --global user.name "Claude Code Review"
+          git config --global user.email "claude-review@anthropic.com"
+      
+      - name: Privacy and Security Scan
+        run: |
+          echo "🔍 Scanning for privacy and security issues..."
+          
+          # Check for image files
+          image_files=$(git diff --name-only origin/main...HEAD | grep -E '\.(jpg|jpeg|png|gif|bmp|tiff|raw|heic|webp)$' || true)
+          if [ ! -z "$image_files" ]; then
+            echo "⚠️ Image files detected:"
+            echo "$image_files"
+            echo "image_files_found=true" >> $GITHUB_ENV
+          else
+            echo "✅ No image files found"
+            echo "image_files_found=false" >> $GITHUB_ENV
+          fi
+          
+          # Check for potential personal data patterns
+          personal_data=$(git diff origin/main...HEAD | grep -i -E 'personal|private|face.*recognition|identity|facial.*id|biometric' || true)
+          if [ ! -z "$personal_data" ]; then
+            echo "⚠️ Potential personal data patterns found"
+            echo "personal_data_found=true" >> $GITHUB_ENV
+          else
+            echo "✅ No personal data patterns detected"
+            echo "personal_data_found=false" >> $GITHUB_ENV
+          fi
+          
+          # Check for hardcoded secrets (additional to git-secrets)
+          secrets_check=$(git diff origin/main...HEAD | grep -i -E 'api[_-]key|secret|token|password|auth.*key' | grep -v -E 'API_KEY|SECRET|TOKEN|test|example|placeholder' || true)
+          if [ ! -z "$secrets_check" ]; then
+            echo "⚠️ Potential hardcoded secrets found"
+            echo "secrets_found=true" >> $GITHUB_ENV
+          else
+            echo "✅ No hardcoded secrets detected"
+            echo "secrets_found=false" >> $GITHUB_ENV
+          fi
+      
+      - name: Block PR if privacy issues found
+        if: env.secrets_found == 'true'
+        run: |
+          echo "🚨 BLOCKING: Potential hardcoded secrets detected in PR"
+          gh pr comment ${{ github.event.pull_request.number }} --body "🚨 **SECURITY BLOCK**: This PR appears to contain hardcoded secrets or API keys. Please remove them and use environment variables or secure secret management instead."
+          exit 1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Run Claude Code Review
+        id: claude_review
+        run: |
+          pr_number="${{ github.event.pull_request.number || inputs.pr_number }}"
+          
+          # Set up environment
+          export ANTHROPIC_API_KEY="${{ secrets.ANTHROPIC_API_KEY }}"
+          
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "❌ ANTHROPIC_API_KEY secret not configured"
+            echo "Please add your Anthropic API key to repository secrets"
+            exit 1
+          fi
+          
+          # Run the Claude review
+          node scripts/claude-review-pr.js "$pr_number"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      
+      - name: Post privacy warnings if needed
+        if: env.image_files_found == 'true' || env.personal_data_found == 'true'
+        run: |
+          warning_message="## 🔒 Privacy Review Required\n\n"
+          
+          if [ "${{ env.image_files_found }}" == "true" ]; then
+            warning_message="${warning_message}⚠️ **Image files detected** in this PR. Please verify:\n"
+            warning_message="${warning_message}- Are these public domain or synthetic test images?\n"
+            warning_message="${warning_message}- Do you have explicit permission for any real photos?\n"
+            warning_message="${warning_message}- Are faces/people anonymized or removed?\n"
+            warning_message="${warning_message}- Could these be replaced with generated test data?\n\n"
+          fi
+          
+          if [ "${{ env.personal_data_found }}" == "true" ]; then
+            warning_message="${warning_message}⚠️ **Personal data patterns detected**. Please review for privacy compliance.\n\n"
+          fi
+          
+          warning_message="${warning_message}Please ensure this PR follows Photosight's privacy-first principles."
+          
+          gh pr comment ${{ github.event.pull_request.number }} --body "$warning_message"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Update PR status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ Claude Code Review completed successfully"
+          else
+            echo "❌ Claude Code Review failed"
+            gh pr comment ${{ github.event.pull_request.number }} --body "❌ **Claude Code Review Failed**: Please check the workflow logs for details."
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
