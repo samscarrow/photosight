@@ -8,6 +8,31 @@ PhotoSight is a comprehensive RAW photo processing system that combines technica
 
 ## Core Features
 
+### ✅ Subject-Aware Smart Cropping
+- **Person & Face Detection**: Automatically detects people and faces in photos
+- **Intelligent Composition**: Suggests crops using rule of thirds and other composition principles
+- **Multiple Aspect Ratios**: Supports various formats from square to cinematic
+- **Confidence Scoring**: Ranks suggestions based on composition quality
+
+### ✅ Intelligent Exposure Optimization
+- **Histogram Analysis**: Multi-zone analysis with shadow/highlight detection
+- **Dynamic Range Enhancement**: Optimizes tonal range while preserving detail
+- **Scene-Aware Adjustments**: Adapts to low-key, high-key, and backlit scenes
+- **Zone System Integration**: Based on Ansel Adams' zone system for precise control
+
+### ✅ White Balance Correction
+- **Multiple Algorithms**: Gray world, white patch, retinex, illuminant estimation, face detection
+- **Scene-Aware Selection**: Automatically chooses best method based on content
+- **Temperature & Tint Controls**: Fine-tune adjustments from -2000K to +2000K
+- **Skin Tone Preservation**: Protects natural skin tones during correction
+
+### ✅ Color Grading Engine
+- **Creative Presets**: Cinematic, vintage, moody, bright & airy, teal-orange, and more
+- **Three-Way Color Wheels**: Independent shadows/midtones/highlights control
+- **HSL Color Mixer**: Selective hue, saturation, and luminance per color channel
+- **Split Toning**: Different colors for highlights and shadows with balance control
+- **Vibrance & Saturation**: Smart saturation that protects skin tones
+
 ### ✅ Scene-Aware Processing
 - **Scene Classification**: Automatically detects indoor vs outdoor scenes
 - **Adaptive Leveling**: Prioritizes architectural features for indoor scenes, horizon lines for outdoor
@@ -33,6 +58,12 @@ PhotoSight is a comprehensive RAW photo processing system that combines technica
 - **Advanced Sharpness**: Multi-region analysis with subject prioritization
 - **Exposure Analysis**: Histogram-based clipping detection and dynamic range assessment
 - **Metadata Integration**: Camera settings, lens information, and shooting conditions
+
+### ✅ MCP Server Integration
+- **Natural Language Queries**: AI assistants can search photos using everyday language
+- **Project Management**: Query projects, tasks, and workflow status via AI
+- **Analytics Access**: Generate insights about gear usage and shooting patterns
+- **Secure Read-Only**: All AI operations are strictly read-only for data protection
 
 ## Installation
 
@@ -69,6 +100,44 @@ python -m photosight.analysis.ai.curator --input ~/Pictures/RAW --output ~/Pictu
 python scene_aware_processing_demo.py
 ```
 
+### Smart Cropping Demo
+```bash
+# Demonstrate intelligent subject-aware cropping
+python demo_smart_crop.py ~/Pictures/photo.jpg
+
+# Process multiple images with comparison grid
+python demo_smart_crop.py ~/Pictures --comparison
+```
+
+### Exposure Optimization Demo
+```bash
+# Analyze and optimize exposure for a single image
+python demo_exposure_optimization.py ~/Pictures/photo.jpg
+
+# Batch analyze exposure for multiple images
+python demo_exposure_optimization.py ~/Pictures --batch
+```
+
+### Color Processing Demo
+```bash
+# Demonstrate white balance and color grading
+python demo_color_processing.py ~/Pictures/photo.jpg
+
+# Show all color adjustments and presets
+python demo_color_processing.py ~/Pictures/photo.jpg --all
+
+# Only test white balance methods
+python demo_color_processing.py ~/Pictures/photo.jpg --wb-only
+```
+
+### MCP Server (AI Assistant Integration)
+```bash
+# Run the MCP server for AI assistant access
+python -m photosight.mcp.server
+
+# Configure for Claude Desktop - see docs/MCP_SERVER.md
+```
+
 ## Architecture
 
 ### Scene-Aware Processing Pipeline
@@ -85,9 +154,15 @@ photosight/
 ├── processing/
 │   ├── scene_classifier.py      # Indoor/outdoor scene detection
 │   ├── raw_processor.py         # Non-destructive RAW processing
-│   └── geometry/
-│       ├── horizon_detector.py  # Multi-method horizon/reference detection
-│       └── auto_straighten.py   # Scene-aware straightening
+│   ├── geometry/
+│   │   ├── horizon_detector.py  # Multi-method horizon/reference detection
+│   │   ├── auto_straighten.py   # Scene-aware straightening
+│   │   └── smart_crop.py        # Subject-aware intelligent cropping
+│   ├── tone/
+│   │   └── exposure_optimizer.py # Histogram-based exposure optimization
+│   └── color/
+│       ├── white_balance.py     # Multi-algorithm white balance correction
+│       └── color_grading.py     # Creative color grading with presets
 ├── analysis/
 │   ├── improved_blur_detection.py  # Regional sharpness with face priority
 │   ├── technical.py             # Exposure and quality analysis
@@ -195,9 +270,9 @@ python -m photosight.io.photos_library --library ~/Pictures/Photos\ Library.phot
 - ✅ Multi-method horizon and reference line detection  
 - ✅ Non-destructive recipe-based processing
 - ✅ Regional blur detection with face prioritization
-- 🚧 Subject-aware intelligent cropping
-- 🚧 Advanced exposure optimization with tone mapping
-- 🚧 White balance and color grading modules
+- ✅ Subject-aware intelligent cropping with rule of thirds
+- ✅ Advanced exposure optimization with shadow/highlight recovery
+- ✅ White balance and color grading modules with creative presets
 - 🚧 Batch processor for large photo collections
 
 ## License

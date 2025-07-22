@@ -111,6 +111,20 @@ similarity:
   similarity_threshold: 0.85  # Higher = more similar required
   time_window_seconds: 300    # Group photos taken within 5 minutes
   
+# Database settings
+database:
+  enabled: true
+  # Use environment variables for sensitive credentials
+  # Set PHOTOSIGHT_DATABASE_URL in your environment
+  url: "${PHOTOSIGHT_DATABASE_URL}"
+  
+  # MCP Server configuration
+  mcp_server:
+    read_only_user: "photosight_readonly"
+    # Set PHOTOSIGHT_MCP_PASSWORD in your environment
+    read_only_password: "${PHOTOSIGHT_MCP_PASSWORD}"
+    max_query_time: 30000  # 30 seconds
+
 # Logging settings
 logging:
   level: "INFO"  # DEBUG, INFO, WARNING, ERROR
