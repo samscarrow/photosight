@@ -1,0 +1,29 @@
+{
+  "name": "photosight",
+  "version": "1.0.0",
+  "description": "An intelligent RAW photo processing pipeline for automatically culling and curating photos from Sony A7III cameras.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/samscarrow/photosight.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/samscarrow/photosight/issues"
+  },
+  "homepage": "https://github.com/samscarrow/photosight#readme",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.57.0",
+    "dotenv": "^17.2.0"
+  }
+}
