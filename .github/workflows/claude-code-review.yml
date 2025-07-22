@@ -79,7 +79,8 @@ jobs:
           
           # Check for hardcoded secrets (additional to git-secrets)
           # Exclude workflow files and CI/CD configurations from the scan
-          secrets_check=$(git diff origin/main...HEAD -- ':!.github/' ':!*.yml' ':!*.yaml' | grep -i -E 'api[_-]key|secret|token|password|auth.*key' | grep -v -E 'API_KEY|SECRET|TOKEN|test|example|placeholder' || true)
+          # Also exclude common placeholder patterns
+          secrets_check=$(git diff origin/main...HEAD -- ':!.github/' ':!*.yml' ':!*.yaml' | grep -i -E 'api[_-]key|secret|token|password|auth.*key' | grep -v -E 'API_KEY|SECRET|TOKEN|test|example|placeholder|your_.*_here|\$\{.*\}|<.*>|xxx|dummy' || true)
           if [ ! -z "$secrets_check" ]; then
             echo "⚠️ Potential hardcoded secrets found"
             echo "secrets_found=true" >> $GITHUB_ENV
