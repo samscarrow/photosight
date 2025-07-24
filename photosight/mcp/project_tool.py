@@ -9,11 +9,9 @@ import json
 import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
-from sqlalchemy import func, and_, or_
-
-from ..db import get_session
-from ..db.models import Project, Task, Photo, ProjectStatus, TaskStatus, TaskPriority
-from ..db.operations import ProjectOperations, TaskOperations
+from ..db.connection import get_session
+from ..db.models import Project, Task, Photo, ProjectPhoto, ProcessingRecipe, project_photos
+from sqlalchemy import and_, or_, func, distinct, case
 from .security import SecurityManager
 
 logger = logging.getLogger(__name__)
@@ -124,8 +122,7 @@ class ProjectTool:
             
             # Apply status filter
             if 'status' in filters:
-                status = ProjectStatus(filters['status'])
-                query = query.filter(Project.status == status)
+                query = query.filter(Project.status == filters['status'])
             
             # Apply due date filters
             if 'due_days' in filters:
@@ -136,12 +133,12 @@ class ProjectTool:
                 query = query.filter(
                     and_(
                         Project.due_date < datetime.now(),
-                        Project.status != ProjectStatus.COMPLETED
+                        Project.status != 'Completed'
                     )
                 )
             
-            # Order by due date
-            query = query.order_by(Project.due_date.asc().nullsfirst())
+            # Order by created date (due_date not in model)
+            query = query.order_by(Project.created_at.desc())
             
             projects = query.all()
             
@@ -149,9 +146,9 @@ class ProjectTool:
             results = []
             for project in projects:
                 # Get photo count
-                photo_count = session.query(Photo).filter(
-                    Photo.project_id == project.id
-                ).count()
+                photo_count = session.query(func.count(project_photos.c.photo_id)).filter(
+                    project_photos.c.project_id == project.id
+                ).scalar() or 0
                 
                 # Get task summary
                 task_count = session.query(Task).filter(
@@ -160,19 +157,20 @@ class ProjectTool:
                 
                 completed_tasks = session.query(Task).filter(
                     Task.project_id == project.id,
-                    Task.status == TaskStatus.COMPLETED
+                    Task.status == 'Done'
                 ).count()
                 
                 results.append({
                     "name": project.name,
-                    "status": project.status.value,
-                    "client": project.client_name,
-                    "type": project.project_type,
-                    "shoot_date": project.shoot_date.isoformat() if project.shoot_date else None,
-                    "due_date": project.due_date.isoformat() if project.due_date else None,
-                    "days_until_due": (project.due_date - datetime.now()).days if project.due_date else None,
+                    "status": project.status,
+                    "phase": project.phase,
+                    "priority": project.priority,
+                    "description": project.description,
+                    "created_at": project.created_at.isoformat() if project.created_at else None,
+                    "updated_at": project.updated_at.isoformat() if project.updated_at else None,
                     "photo_count": photo_count,
-                    "expected_photos": project.expected_photos,
+                    "task_count": task_count,
+                    "completed_tasks": completed_tasks,
                     "task_progress": f"{completed_tasks}/{task_count}" if task_count > 0 else "No tasks"
                 })
             
@@ -184,50 +182,85 @@ class ProjectTool:
     
     async def _get_project_status(self, project_name: str) -> Dict[str, Any]:
         """Get detailed status for a specific project."""
-        stats = ProjectOperations.get_project_statistics(project_name)
-        
-        if not stats:
-            return {
-                "error": f"Project '{project_name}' not found"
-            }
-        
-        # Get recent tasks
         with get_session() as session:
-            recent_tasks = session.query(Task).join(
-                Project, Task.project_id == Project.id
-            ).filter(
+            # Get project
+            project = session.query(Project).filter(
                 Project.name == project_name
+            ).first()
+            
+            if not project:
+                return {
+                    "error": f"Project '{project_name}' not found"
+                }
+            
+            # Get statistics
+            photo_count = session.query(func.count(project_photos.c.photo_id)).filter(
+                project_photos.c.project_id == project.id
+            ).scalar() or 0
+            
+            # Get photos with ratings (using Photo.rating if it exists, otherwise use analysis_results)
+            rated_photos = session.query(
+                func.coalesce(Photo.rating, 0).label('rating'),
+                func.count(Photo.id).label('count')
+            ).select_from(Photo).join(
+                project_photos, Photo.id == project_photos.c.photo_id
+            ).filter(
+                project_photos.c.project_id == project.id
+            ).group_by(func.coalesce(Photo.rating, 0)).all()
+            
+            accepted = sum(count for rating, count in rated_photos if rating and rating >= 3)
+            rejected = sum(count for rating, count in rated_photos if rating and rating < 3)
+            
+            # Get task counts
+            total_tasks = session.query(Task).filter(
+                Task.project_id == project.id
+            ).count()
+            
+            completed_tasks = session.query(Task).filter(
+                Task.project_id == project.id,
+                Task.status == 'Done'
+            ).count()
+            
+            # Get recent tasks
+            recent_tasks = session.query(Task).filter(
+                Task.project_id == project.id
             ).order_by(Task.updated_at.desc()).limit(5).all()
             
             task_list = []
             for task in recent_tasks:
                 task_list.append({
                     "name": task.name,
-                    "status": task.status.value,
-                    "priority": task.priority.value,
-                    "assigned_to": task.assigned_to,
+                    "status": task.status,
+                    "priority": task.priority,
+                    "assignee": task.assignee,
                     "due_date": task.due_date.isoformat() if task.due_date else None
                 })
         
-        return {
-            "action": "project_status",
-            "project": project_name,
-            "status": stats['status'],
-            "progress_percentage": stats['progress_percentage'],
-            "days_until_due": stats['days_until_due'],
-            "photos": {
-                "total": stats['total_photos'],
-                "accepted": stats['accepted_photos'],
-                "rejected": stats['rejected_photos'],
-                "expected": stats['expected_photos']
-            },
-            "tasks": {
-                "total": stats['total_tasks'],
-                "completed": stats['completed_tasks'],
-                "completion_rate": stats['task_completion_rate'],
-                "recent": task_list
+            return {
+                "action": "project_status",
+                "project": project_name,
+                "status": project.status,
+                "phase": project.phase,
+                "priority": project.priority,
+                "created_at": project.created_at.isoformat() if project.created_at else None,
+                "updated_at": project.updated_at.isoformat() if project.updated_at else None,
+                "completed_at": project.completed_at.isoformat() if project.completed_at else None,
+                "photos": {
+                    "total": photo_count,
+                    "accepted": accepted,
+                    "rejected": rejected,
+                    "rating_distribution": [
+                        {"rating": rating, "count": count}
+                        for rating, count in rated_photos
+                    ]
+                },
+                "tasks": {
+                    "total": total_tasks,
+                    "completed": completed_tasks,
+                    "completion_rate": round(completed_tasks / total_tasks * 100, 1) if total_tasks else 0,
+                    "recent": task_list
+                }
             }
-        }
     
     async def _list_tasks(self, project_name: Optional[str], filters: Dict[str, Any]) -> Dict[str, Any]:
         """List tasks with optional filtering."""
@@ -242,12 +275,27 @@ class ProjectTool:
             
             # Apply status filter
             if 'task_status' in filters:
-                status = TaskStatus(filters['task_status'])
+                # Map from enum values to actual status strings
+                status_map = {
+                    'todo': 'To Do',
+                    'in_progress': 'In Progress', 
+                    'review': 'Code Review',
+                    'completed': 'Done',
+                    'blocked': 'Blocked'
+                }
+                status = status_map.get(filters['task_status'], filters['task_status'])
                 query = query.filter(Task.status == status)
             
-            # Apply priority filter
+            # Apply priority filter  
             if 'priority' in filters:
-                priority = TaskPriority(filters['priority'])
+                # Map from enum values to actual priority strings
+                priority_map = {
+                    'low': 'P3-Low',
+                    'medium': 'P2-Medium',
+                    'high': 'P1-High',
+                    'urgent': 'P0-Critical'
+                }
+                priority = priority_map.get(filters['priority'], filters['priority'])
                 query = query.filter(Task.priority == priority)
             
             # Apply assignee filter
@@ -255,8 +303,17 @@ class ProjectTool:
                 query = query.filter(Task.assigned_to == filters['assigned_to'])
             
             # Order by priority and due date
+            # Create custom ordering for priority
+            priority_order = case(
+                (Task.priority == 'P0-Critical', 0),
+                (Task.priority == 'P1-High', 1),
+                (Task.priority == 'P2-Medium', 2),
+                (Task.priority == 'P3-Low', 3),
+                else_=4
+            )
+            
             query = query.order_by(
-                Task.priority.desc(),
+                priority_order,
                 Task.due_date.asc().nullsfirst()
             )
             
@@ -274,13 +331,13 @@ class ProjectTool:
                     "id": task.id,
                     "name": task.name,
                     "project": project.name if project else "Unknown",
-                    "status": task.status.value,
-                    "priority": task.priority.value,
-                    "assigned_to": task.assigned_to,
-                    "type": task.task_type,
+                    "status": task.status,
+                    "priority": task.priority,
+                    "assignee": task.assigned_to,
+                    "description": task.description,
                     "due_date": task.due_date.isoformat() if task.due_date else None,
-                    "estimated_hours": task.estimated_hours,
-                    "actual_hours": task.actual_hours
+                    "created_at": task.created_at.isoformat() if task.created_at else None,
+                    "completed_at": task.completed_at.isoformat() if task.completed_at else None
                 })
             
             return {
@@ -302,83 +359,102 @@ class ProjectTool:
                 if not project:
                     return {"error": f"Project '{project_name}' not found"}
                 
-                # Get photo quality distribution
+                # Get photo quality distribution by rating (using analysis results since Photo.rating might not exist)
                 quality_stats = session.query(
-                    Photo.processing_status,
+                    func.coalesce(Photo.rating, 0).label('rating'),
                     func.count(Photo.id).label('count')
+                ).select_from(Photo).join(
+                    project_photos, Photo.id == project_photos.c.photo_id
                 ).filter(
-                    Photo.project_id == project.id
-                ).group_by(Photo.processing_status).all()
+                    project_photos.c.project_id == project.id
+                ).group_by(func.coalesce(Photo.rating, 0)).all()
                 
-                # Get rejection reasons
-                rejection_stats = session.query(
-                    Photo.rejection_reason,
-                    func.count(Photo.id).label('count')
+                # Get photos with issues from metadata
+                photos_with_issues = session.query(Photo).select_from(Photo).join(
+                    project_photos, Photo.id == project_photos.c.photo_id
                 ).filter(
-                    Photo.project_id == project.id,
-                    Photo.rejection_reason.isnot(None)
-                ).group_by(Photo.rejection_reason).all()
+                    project_photos.c.project_id == project.id,
+                    func.coalesce(Photo.rating, 0) < 3
+                ).all()
+                
+                issue_counts = {}
+                for photo in photos_with_issues:
+                    if photo.meta_data and 'quality_issues' in photo.meta_data:
+                        for issue in photo.meta_data.get('quality_issues', []):
+                            issue_counts[issue] = issue_counts.get(issue, 0) + 1
+                
+                rejection_stats = list(issue_counts.items())
                 
                 # Task analytics
                 task_stats = session.query(
                     Task.status,
-                    func.count(Task.id).label('count')
+                    func.count(Task.id).label('count')  
                 ).filter(
                     Task.project_id == project.id
                 ).group_by(Task.status).all()
+                
+                # Count processed photos (with recipes) - using ProcessingRecipe table  
+                processed_count = session.query(
+                    func.count(distinct(ProcessingRecipe.photo_id))
+                ).select_from(ProcessingRecipe).join(
+                    Photo, ProcessingRecipe.photo_id == Photo.id
+                ).join(
+                    project_photos, Photo.id == project_photos.c.photo_id
+                ).filter(
+                    project_photos.c.project_id == project.id
+                ).scalar() or 0
+                
+                total_photos = sum(count for _, count in quality_stats)
+                accepted_photos = sum(count for rating, count in quality_stats if rating and rating >= 3)
                 
                 return {
                     "action": "project_analytics",
                     "project": project_name,
                     "photo_quality": {
-                        status: count for status, count in quality_stats
+                        f"rating_{rating or 0}": count 
+                        for rating, count in quality_stats
                     },
-                    "rejection_reasons": {
-                        reason: count for reason, count in rejection_stats
-                    },
+                    "quality_issues": dict(rejection_stats),
                     "task_distribution": {
-                        status.value: count for status, count in task_stats
+                        status: count for status, count in task_stats
                     },
                     "efficiency": {
-                        "acceptance_rate": self._calculate_acceptance_rate(quality_stats),
-                        "delivery_progress": (project.delivered_photos / project.expected_photos * 100) 
-                                           if project.expected_photos else 0
+                        "total_photos": total_photos,
+                        "accepted_photos": accepted_photos,
+                        "processed_photos": processed_count,
+                        "acceptance_rate": round(accepted_photos / total_photos * 100, 1) if total_photos else 0,
+                        "processing_rate": round(processed_count / total_photos * 100, 1) if total_photos else 0
                     }
                 }
             else:
                 # Overall project analytics
                 active_projects = session.query(Project).filter(
-                    Project.status == ProjectStatus.ACTIVE
+                    Project.status == 'Active'
                 ).count()
                 
-                overdue_projects = session.query(Project).filter(
-                    and_(
-                        Project.due_date < datetime.now(),
-                        Project.status != ProjectStatus.COMPLETED
-                    )
+                completed_projects = session.query(Project).filter(
+                    Project.status == 'Completed'
                 ).count()
                 
-                # Photos by project type
-                type_stats = session.query(
-                    Project.project_type,
+                # Photos by project phase
+                phase_stats = session.query(
+                    Project.phase,
                     func.count(Photo.id).label('photo_count')
+                ).select_from(Project).join(
+                    project_photos, Project.id == project_photos.c.project_id
                 ).join(
-                    Photo, Project.id == Photo.project_id
-                ).group_by(Project.project_type).all()
+                    Photo, project_photos.c.photo_id == Photo.id
+                ).group_by(Project.phase).all()
                 
                 return {
                     "action": "project_analytics",
                     "overview": {
                         "active_projects": active_projects,
-                        "overdue_projects": overdue_projects,
-                        "photos_by_type": {
-                            ptype: count for ptype, count in type_stats if ptype
+                        "completed_projects": completed_projects,
+                        "total_projects": session.query(Project).count(),
+                        "photos_by_phase": {
+                            phase: count for phase, count in phase_stats if phase
                         }
                     }
                 }
     
-    def _calculate_acceptance_rate(self, quality_stats: List) -> float:
-        """Calculate photo acceptance rate from quality statistics."""
-        total = sum(count for _, count in quality_stats)
-        accepted = sum(count for status, count in quality_stats if status == 'processed')
-        return round((accepted / total * 100) if total > 0 else 0, 1)

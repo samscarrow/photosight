@@ -16,7 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from .models import (
     Photo, AnalysisResult, ProcessingRecipe, BatchSession,
     FaceDetection, SimilarityGroup, PhotoSimilarity, CompositionAnalysis,
-    Project, Task, ProjectStatus, TaskStatus, TaskPriority
+    Project, Task, ProjectStatus, TaskStatus, TaskPriority, FileStatus
 )
 from .connection import get_session
 
@@ -270,6 +270,223 @@ class PhotoOperations:
         except Exception as e:
             logger.error(f"Failed to get photos by status: {e}")
             return []
+    
+    @staticmethod
+    def update_file_status(
+        photo_id: int,
+        file_status: FileStatus,
+        machine_id: Optional[str] = None,
+        storage_path: Optional[str] = None,
+        sync_version: Optional[int] = None
+    ) -> bool:
+        """
+        Update photo file sync status.
+        
+        Args:
+            photo_id: Photo ID
+            file_status: New file status
+            machine_id: Machine that has the file
+            storage_path: Cloud storage path if applicable
+            sync_version: Version number for sync tracking
+            
+        Returns:
+            True if updated successfully
+        """
+        try:
+            with get_session() as session:
+                photo = session.query(Photo).filter(Photo.id == photo_id).first()
+                if not photo:
+                    return False
+                
+                photo.file_status = file_status
+                photo.last_sync_at = datetime.utcnow()
+                
+                if machine_id is not None:
+                    photo.machine_id = machine_id
+                if storage_path is not None:
+                    photo.storage_path = storage_path
+                if sync_version is not None:
+                    photo.sync_version = sync_version
+                
+                logger.info(f"Updated photo {photo_id} file status to {file_status.value}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Failed to update file status: {e}")
+            return False
+    
+    @staticmethod
+    def verify_file_checksum(photo_id: int, file_path: str) -> bool:
+        """
+        Verify file checksum matches database record.
+        
+        Args:
+            photo_id: Photo ID
+            file_path: Path to local file
+            
+        Returns:
+            True if checksum matches
+        """
+        try:
+            import hashlib
+            
+            with get_session() as session:
+                photo = session.query(Photo).filter(Photo.id == photo_id).first()
+                if not photo or not photo.checksum:
+                    return False
+                
+                # Calculate file checksum
+                sha256_hash = hashlib.sha256()
+                with open(file_path, "rb") as f:
+                    for byte_block in iter(lambda: f.read(4096), b""):
+                        sha256_hash.update(byte_block)
+                
+                calculated_checksum = sha256_hash.hexdigest()
+                return calculated_checksum == photo.checksum
+                
+        except Exception as e:
+            logger.error(f"Failed to verify checksum: {e}")
+            return False
+    
+    @staticmethod
+    def get_photos_by_sync_status(
+        file_status: FileStatus,
+        machine_id: Optional[str] = None,
+        limit: int = 100
+    ) -> List[Photo]:
+        """
+        Get photos by sync status.
+        
+        Args:
+            file_status: File sync status to filter by
+            machine_id: Optional machine ID filter
+            limit: Maximum number of results
+            
+        Returns:
+            List of photos matching criteria
+        """
+        try:
+            with get_session() as session:
+                query = session.query(Photo).filter(Photo.file_status == file_status)
+                
+                if machine_id:
+                    query = query.filter(Photo.machine_id == machine_id)
+                
+                return query.order_by(desc(Photo.last_sync_at)).limit(limit).all()
+                
+        except Exception as e:
+            logger.error(f"Failed to get photos by sync status: {e}")
+            return []
+    
+    @staticmethod
+    def get_sync_conflicts(machine_id: str) -> List[Photo]:
+        """
+        Get photos with sync conflicts for a specific machine.
+        
+        Args:
+            machine_id: Machine ID to check conflicts for
+            
+        Returns:
+            List of photos with conflicts
+        """
+        try:
+            with get_session() as session:
+                return session.query(Photo).filter(
+                    Photo.file_status.in_([FileStatus.CONFLICT, FileStatus.MISSING]),
+                    Photo.machine_id == machine_id
+                ).order_by(desc(Photo.last_sync_at)).all()
+                
+        except Exception as e:
+            logger.error(f"Failed to get sync conflicts: {e}")
+            return []
+    
+    @staticmethod
+    def mark_file_modified(photo_id: int, file_modified_at: datetime) -> bool:
+        """
+        Mark a file as locally modified.
+        
+        Args:
+            photo_id: Photo ID
+            file_modified_at: File modification timestamp
+            
+        Returns:
+            True if updated successfully
+        """
+        try:
+            with get_session() as session:
+                photo = session.query(Photo).filter(Photo.id == photo_id).first()
+                if not photo:
+                    return False
+                
+                photo.file_modified_at = file_modified_at
+                
+                # Update status if file was previously synced
+                if photo.file_status == FileStatus.SYNCED:
+                    photo.file_status = FileStatus.LOCAL_MODIFIED
+                
+                return True
+                
+        except Exception as e:
+            logger.error(f"Failed to mark file as modified: {e}")
+            return False
+    
+    @staticmethod
+    def get_sync_statistics(machine_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get sync statistics for the photo library.
+        
+        Args:
+            machine_id: Optional machine ID to filter by
+            
+        Returns:
+            Dictionary with sync statistics
+        """
+        try:
+            with get_session() as session:
+                base_query = session.query(Photo)
+                
+                if machine_id:
+                    base_query = base_query.filter(Photo.machine_id == machine_id)
+                
+                # Count by status
+                status_counts = {}
+                for status in FileStatus:
+                    count = base_query.filter(Photo.file_status == status).count()
+                    status_counts[status.value] = count
+                
+                # Total photos
+                total_photos = base_query.count()
+                
+                # Photos with checksums
+                photos_with_checksums = base_query.filter(
+                    Photo.checksum.isnot(None)
+                ).count()
+                
+                # Recent sync activity
+                recent_syncs = base_query.filter(
+                    Photo.last_sync_at.isnot(None)
+                ).order_by(desc(Photo.last_sync_at)).limit(10).all()
+                
+                return {
+                    'total_photos': total_photos,
+                    'status_counts': status_counts,
+                    'photos_with_checksums': photos_with_checksums,
+                    'checksum_percentage': (photos_with_checksums / total_photos * 100) if total_photos else 0,
+                    'recent_syncs': [
+                        {
+                            'photo_id': p.id,
+                            'filename': p.filename,
+                            'status': p.file_status.value,
+                            'last_sync': p.last_sync_at.isoformat() if p.last_sync_at else None
+                        }
+                        for p in recent_syncs
+                    ],
+                    'machine_id': machine_id
+                }
+                
+        except Exception as e:
+            logger.error(f"Failed to get sync statistics: {e}")
+            return {}
     
     @staticmethod
     def search_photos(

@@ -4,13 +4,33 @@ Configuration management for PhotoSight
 
 import yaml
 import os
+import re
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Union
 import logging
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_PATH = Path(__file__).parent.parent / "config.yaml"
+
+def _expand_env_vars(obj: Union[Dict, Any]) -> Union[Dict, Any]:
+    """
+    Recursively expand environment variables in config values.
+    Supports ${VAR_NAME} syntax.
+    """
+    if isinstance(obj, dict):
+        return {key: _expand_env_vars(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [_expand_env_vars(item) for item in obj]
+    elif isinstance(obj, str):
+        # Replace ${VAR_NAME} with environment variable values
+        pattern = r'\$\{([^}]+)\}'
+        def replace_var(match):
+            var_name = match.group(1)
+            return os.getenv(var_name, match.group(0))  # Return original if not found
+        return re.sub(pattern, replace_var, obj)
+    else:
+        return obj
 
 def load_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
     """
@@ -33,6 +53,8 @@ def load_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
         logger.info(f"Loaded configuration from {config_path}")
+        # Expand environment variables in config values
+        config = _expand_env_vars(config)
         return config
     except Exception as e:
         logger.error(f"Failed to load config from {config_path}: {e}")
@@ -46,6 +68,12 @@ def get_default_config() -> Dict[str, Any]:
         Default configuration dictionary
     """
     return {
+        'sync': {
+            'machine_id': None,  # Auto-generated if not set
+            'verify_checksums': True,
+            'auto_detect_conflicts': True,
+            'cloud_storage_path': None,
+        },
         'protection': {
             'enable_protection': True,
             'verify_checksums': True,
@@ -161,3 +189,37 @@ def update_config_value(config: Dict[str, Any], key_path: str, value: Any) -> No
     
     # Set the final value
     current[keys[-1]] = value
+
+
+def get_machine_id(config: Dict[str, Any]) -> str:
+    """
+    Get or generate machine ID for sync tracking.
+    
+    Args:
+        config: Configuration dictionary
+        
+    Returns:
+        Machine ID string
+    """
+    machine_id = get_config_value(config, 'sync.machine_id')
+    
+    if not machine_id:
+        # Generate machine ID based on hostname and MAC address
+        import socket
+        import uuid
+        
+        hostname = socket.gethostname()
+        mac = uuid.UUID(int=uuid.getnode()).hex[-12:]
+        machine_id = f"{hostname}-{mac}"
+        
+        # Save to config
+        update_config_value(config, 'sync.machine_id', machine_id)
+        
+        # Try to save config
+        config_path = Path.home() / '.photosight' / 'config.yaml'
+        if config_path.parent.exists():
+            save_config(config, config_path)
+        
+        logger.info(f"Generated machine ID: {machine_id}")
+    
+    return machine_id

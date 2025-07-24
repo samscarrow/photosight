@@ -11,9 +11,10 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 from sqlalchemy import text, func
 
-from ..db import get_session
-from ..db.operations import PhotoOperations, AnalysisOperations
-from ..db.models import Photo, AnalysisResult
+from ..db.connection import get_session
+from ..db.operations import PhotoOperations
+from ..db.models import Photo, Project, Task, ProjectPhoto, ProcessingRecipe
+from sqlalchemy import and_, or_, func, distinct
 from .security import SecurityManager, SecurityError
 from .query_builder import NaturalLanguageQueryBuilder
 
@@ -86,32 +87,84 @@ class QueryTool:
             if project:
                 search_params['project_name'] = project
             
-            # Execute search
-            photos = PhotoOperations.search_photos(
-                **search_params,
-                limit=limit
-            )
+            # Execute search using database
+            with get_session() as session:
+                # Build base query
+                db_query = session.query(Photo)
+                
+                # Apply filters from parsed parameters
+                if 'camera_model' in search_params:
+                    db_query = db_query.filter(Photo.camera_model.ilike(f"%{search_params['camera_model']}%"))
+                
+                if 'lens_model' in search_params:
+                    db_query = db_query.filter(Photo.lens_model.ilike(f"%{search_params['lens_model']}%"))
+                
+                if 'focal_length' in search_params:
+                    fl = search_params['focal_length']
+                    if isinstance(fl, dict):
+                        if 'min' in fl:
+                            db_query = db_query.filter(Photo.focal_length >= fl['min'])
+                        if 'max' in fl:
+                            db_query = db_query.filter(Photo.focal_length <= fl['max'])
+                    else:
+                        db_query = db_query.filter(Photo.focal_length == fl)
+                
+                if 'aperture' in search_params:
+                    db_query = db_query.filter(Photo.aperture == search_params['aperture'])
+                
+                if 'iso' in search_params:
+                    iso = search_params['iso']
+                    if isinstance(iso, dict):
+                        if 'min' in iso:
+                            db_query = db_query.filter(Photo.iso >= iso['min'])
+                        if 'max' in iso:
+                            db_query = db_query.filter(Photo.iso <= iso['max'])
+                    else:
+                        db_query = db_query.filter(Photo.iso == iso)
+                
+                if 'rating' in search_params:
+                    db_query = db_query.filter(Photo.rating >= search_params['rating'])
+                
+                if 'tags' in search_params:
+                    # PostgreSQL array contains
+                    for tag in search_params['tags']:
+                        db_query = db_query.filter(Photo.tags.contains([tag]))
+                
+                if 'date_range' in search_params:
+                    dr = search_params['date_range']
+                    if 'start' in dr:
+                        db_query = db_query.filter(Photo.capture_date >= dr['start'])
+                    if 'end' in dr:
+                        db_query = db_query.filter(Photo.capture_date <= dr['end'])
+                
+                # Filter by project if specified
+                if project:
+                    db_query = db_query.join(Photo.projects).filter(Project.name == project)
+                
+                # Apply limit and execute
+                photos = db_query.limit(limit).all()
             
             # Format results
             results = []
             for photo in photos:
                 results.append({
                     "id": photo.id,
-                    "filename": photo.filename,
-                    "date_taken": photo.date_taken.isoformat() if photo.date_taken else None,
+                    "filename": photo.file_name,
+                    "date_taken": photo.capture_date.isoformat() if photo.capture_date else None,
                     "camera": f"{photo.camera_make} {photo.camera_model}",
                     "lens": photo.lens_model,
                     "settings": {
                         "iso": photo.iso,
                         "aperture": f"f/{photo.aperture}" if photo.aperture else None,
-                        "shutter_speed": photo.shutter_speed_display,
+                        "shutter_speed": photo.shutter_speed,
                         "focal_length": f"{photo.focal_length}mm" if photo.focal_length else None
                     },
                     "location": {
                         "latitude": photo.gps_latitude,
                         "longitude": photo.gps_longitude
                     } if photo.gps_latitude else None,
-                    "quality_status": photo.processing_status
+                    "quality_status": photo.meta_data.get('processing_status', 'pending') if photo.meta_data else 'pending',
+                    "projects": [p.name for p in photo.projects]
                 })
             
             return {
@@ -228,7 +281,56 @@ class StatisticsTool:
     
     async def _get_gear_statistics(self, since_date: Optional[datetime], project_name: Optional[str] = None) -> Dict[str, Any]:
         """Get camera gear usage statistics."""
-        stats = PhotoOperations.get_gear_statistics(project_name=project_name)
+        with get_session() as session:
+            # Base query
+            query = session.query(Photo)
+            
+            # Filter by date if specified
+            if since_date:
+                query = query.filter(Photo.capture_date >= since_date)
+            
+            # Filter by project if specified
+            if project_name:
+                query = query.join(Photo.projects).filter(Project.name == project_name)
+            
+            # Get camera statistics
+            camera_stats = query.with_entities(
+                Photo.camera_model,
+                func.count(Photo.id).label('count')
+            ).filter(
+                Photo.camera_model.isnot(None)
+            ).group_by(Photo.camera_model).order_by(func.count(Photo.id).desc()).all()
+            
+            # Get lens statistics
+            lens_stats = query.with_entities(
+                Photo.lens_model,
+                func.count(Photo.id).label('count')
+            ).filter(
+                Photo.lens_model.isnot(None)
+            ).group_by(Photo.lens_model).order_by(func.count(Photo.id).desc()).all()
+            
+            # Get focal length distribution
+            fl_stats = query.with_entities(
+                Photo.focal_length,
+                func.count(Photo.id).label('count')
+            ).filter(
+                Photo.focal_length.isnot(None)
+            ).group_by(Photo.focal_length).order_by(Photo.focal_length).all()
+            
+            stats = {
+                'cameras': [
+                    {'model': cam[0], 'count': cam[1]}
+                    for cam in camera_stats
+                ],
+                'lenses': [
+                    {'model': lens[0], 'count': lens[1]}
+                    for lens in lens_stats
+                ],
+                'focal_lengths': [
+                    {'focal_length': int(fl[0]), 'count': fl[1]}
+                    for fl in fl_stats if fl[0]
+                ]
+            }
         
         # Add usage percentages
         total_photos = sum(cam['count'] for cam in stats['cameras'])
@@ -245,7 +347,65 @@ class StatisticsTool:
     
     async def _get_shooting_statistics(self, since_date: Optional[datetime], project_name: Optional[str] = None) -> Dict[str, Any]:
         """Get shooting pattern statistics."""
-        stats = PhotoOperations.get_shooting_statistics(project_name=project_name)
+        with get_session() as session:
+            # Base query
+            query = session.query(Photo)
+            
+            # Filter by date if specified
+            if since_date:
+                query = query.filter(Photo.capture_date >= since_date)
+            
+            # Filter by project if specified
+            if project_name:
+                query = query.join(Photo.projects).filter(Project.name == project_name)
+            
+            # Calculate statistics
+            total_photos = query.count()
+            
+            # Average settings
+            avg_stats = query.with_entities(
+                func.avg(Photo.iso).label('avg_iso'),
+                func.avg(Photo.aperture).label('avg_aperture'),
+                func.avg(Photo.focal_length).label('avg_focal_length')
+            ).first()
+            
+            # GPS usage
+            gps_count = query.filter(
+                Photo.gps_latitude.isnot(None),
+                Photo.gps_longitude.isnot(None)
+            ).count()
+            
+            # Most common ISO values
+            iso_distribution = query.with_entities(
+                Photo.iso,
+                func.count(Photo.id).label('count')
+            ).filter(
+                Photo.iso.isnot(None)
+            ).group_by(Photo.iso).order_by(func.count(Photo.id).desc()).limit(10).all()
+            
+            # Aperture distribution
+            aperture_distribution = query.with_entities(
+                Photo.aperture,
+                func.count(Photo.id).label('count')
+            ).filter(
+                Photo.aperture.isnot(None)
+            ).group_by(Photo.aperture).order_by(Photo.aperture).all()
+            
+            stats = {
+                'total_photos': total_photos,
+                'average_iso': int(avg_stats.avg_iso) if avg_stats.avg_iso else None,
+                'average_aperture': round(float(avg_stats.avg_aperture), 1) if avg_stats.avg_aperture else None,
+                'average_focal_length': int(avg_stats.avg_focal_length) if avg_stats.avg_focal_length else None,
+                'gps_percentage': round(gps_count / total_photos * 100, 1) if total_photos else 0,
+                'iso_distribution': [
+                    {'iso': iso[0], 'count': iso[1]}
+                    for iso in iso_distribution
+                ],
+                'aperture_distribution': [
+                    {'aperture': float(ap[0]), 'count': ap[1]}
+                    for ap in aperture_distribution if ap[0]
+                ]
+            }
         
         return {
             "type": "shooting",
@@ -260,28 +420,50 @@ class StatisticsTool:
             # Base query
             query = session.query(Photo)
             
+            # Filter by date if specified
+            if since_date:
+                query = query.filter(Photo.capture_date >= since_date)
+            
             # Filter by project if specified
             if project_name:
-                from ..db.models import Project
-                query = query.join(Project).filter(Project.name == project_name)
+                query = query.join(Photo.projects).filter(Project.name == project_name)
             
-            # Get acceptance rate
+            # Get quality metrics from metadata
             total = query.count()
-            accepted = query.filter(
-                Photo.processing_status == 'processed'
-            ).count()
-            rejected = query.filter(
-                Photo.processing_status == 'rejected'
-            ).count()
             
-            # Get rejection reasons
-            rejection_query = query.filter(
-                Photo.rejection_reason.isnot(None)
-            )
-            rejection_stats = rejection_query.with_entities(
-                Photo.rejection_reason,
+            # Count by rating
+            rating_stats = query.with_entities(
+                Photo.rating,
                 func.count(Photo.id).label('count')
-            ).group_by(Photo.rejection_reason).all()
+            ).filter(
+                Photo.rating.isnot(None)
+            ).group_by(Photo.rating).order_by(Photo.rating.desc()).all()
+            
+            # Count accepted (rating >= 3)
+            accepted = query.filter(Photo.rating >= 3).count()
+            rejected = query.filter(Photo.rating < 3).count()
+            
+            # Get photos with processing recipes (processed)
+            processed = session.query(func.count(distinct(ProcessingRecipe.photo_id))).scalar() or 0
+            
+            # Extract rejection reasons from metadata
+            rejection_reasons = {}
+            photos_with_issues = query.filter(
+                or_(
+                    Photo.rating < 3,
+                    Photo.meta_data['quality_issues'].isnot(None)
+                )
+            ).all()
+            
+            for photo in photos_with_issues:
+                if photo.meta_data and 'quality_issues' in photo.meta_data:
+                    for issue in photo.meta_data.get('quality_issues', []):
+                        rejection_reasons[issue] = rejection_reasons.get(issue, 0) + 1
+            
+            rejection_stats = [
+                (reason, count)
+                for reason, count in rejection_reasons.items()
+            ]
             
             return {
                 "type": "quality",
@@ -289,10 +471,15 @@ class StatisticsTool:
                     "total_photos": total,
                     "accepted": accepted,
                     "rejected": rejected,
+                    "processed": processed,
                     "acceptance_rate": round(accepted / total * 100, 1) if total else 0,
-                    "rejection_reasons": [
-                        {"reason": r[0], "count": r[1]} 
-                        for r in rejection_stats
+                    "rating_distribution": [
+                        {"rating": r[0], "count": r[1]}
+                        for r in rating_stats
+                    ],
+                    "quality_issues": [
+                        {"issue": r[0], "count": r[1]} 
+                        for r in sorted(rejection_stats, key=lambda x: x[1], reverse=True)
                     ]
                 },
                 "insights": self._generate_quality_insights(rejection_stats),
@@ -362,11 +549,153 @@ class StatisticsTool:
         if rejection_stats:
             top_reason = max(rejection_stats, key=lambda x: x[1])
             insights.append(
-                f"Most common rejection reason: {top_reason[0]} "
+                f"Most common quality issue: {top_reason[0]} "
                 f"({top_reason[1]} photos)"
             )
         
         return insights
+    
+    async def _get_temporal_statistics(self, since_date: Optional[datetime], group_by: Optional[str]) -> Dict[str, Any]:
+        """Get temporal statistics."""
+        with get_session() as session:
+            # Base query
+            query = session.query(Photo)
+            
+            # Filter by date if specified
+            if since_date:
+                query = query.filter(Photo.capture_date >= since_date)
+            
+            # Group by time period
+            if group_by == 'month':
+                temporal_stats = query.with_entities(
+                    func.date_trunc('month', Photo.capture_date).label('period'),
+                    func.count(Photo.id).label('count')
+                ).filter(
+                    Photo.capture_date.isnot(None)
+                ).group_by('period').order_by('period').all()
+                
+                return {
+                    "type": "temporal",
+                    "group_by": "month",
+                    "statistics": [
+                        {
+                            "period": period.strftime('%Y-%m') if period else None,
+                            "count": count
+                        }
+                        for period, count in temporal_stats
+                    ]
+                }
+            elif group_by == 'year':
+                temporal_stats = query.with_entities(
+                    func.date_part('year', Photo.capture_date).label('year'),
+                    func.count(Photo.id).label('count')
+                ).filter(
+                    Photo.capture_date.isnot(None)
+                ).group_by('year').order_by('year').all()
+                
+                return {
+                    "type": "temporal",
+                    "group_by": "year",
+                    "statistics": [
+                        {
+                            "year": int(year) if year else None,
+                            "count": count
+                        }
+                        for year, count in temporal_stats
+                    ]
+                }
+            else:
+                # Default to daily for recent data
+                temporal_stats = query.with_entities(
+                    func.date(Photo.capture_date).label('date'),
+                    func.count(Photo.id).label('count')
+                ).filter(
+                    Photo.capture_date.isnot(None)
+                ).group_by('date').order_by('date').limit(90).all()
+                
+                return {
+                    "type": "temporal",
+                    "group_by": "day",
+                    "statistics": [
+                        {
+                            "date": date.isoformat() if date else None,
+                            "count": count
+                        }
+                        for date, count in temporal_stats
+                    ]
+                }
+    
+    async def _get_location_statistics(self, since_date: Optional[datetime]) -> Dict[str, Any]:
+        """Get location statistics."""
+        with get_session() as session:
+            # Base query
+            query = session.query(Photo)
+            
+            # Filter by date if specified
+            if since_date:
+                query = query.filter(Photo.capture_date >= since_date)
+            
+            # Get photos with GPS data
+            gps_photos = query.filter(
+                Photo.gps_latitude.isnot(None),
+                Photo.gps_longitude.isnot(None)
+            ).all()
+            
+            # Calculate location clusters (simple grid-based)
+            location_clusters = {}
+            grid_size = 0.1  # ~10km grid
+            
+            for photo in gps_photos:
+                # Round to grid
+                lat_grid = round(photo.gps_latitude / grid_size) * grid_size
+                lon_grid = round(photo.gps_longitude / grid_size) * grid_size
+                key = f"{lat_grid:.1f},{lon_grid:.1f}"
+                
+                if key not in location_clusters:
+                    location_clusters[key] = {
+                        'center_lat': lat_grid,
+                        'center_lon': lon_grid,
+                        'count': 0,
+                        'photos': []
+                    }
+                
+                location_clusters[key]['count'] += 1
+                if len(location_clusters[key]['photos']) < 5:
+                    location_clusters[key]['photos'].append(photo.file_name)
+            
+            # Sort by photo count
+            top_locations = sorted(
+                location_clusters.values(),
+                key=lambda x: x['count'],
+                reverse=True
+            )[:10]
+            
+            return {
+                "type": "location",
+                "total_geotagged": len(gps_photos),
+                "location_clusters": top_locations,
+                "coverage_area": self._calculate_coverage_area(gps_photos) if gps_photos else None
+            }
+    
+    def _calculate_coverage_area(self, photos: List[Photo]) -> Dict[str, float]:
+        """Calculate the geographic coverage area."""
+        if not photos:
+            return None
+            
+        lats = [p.gps_latitude for p in photos if p.gps_latitude]
+        lons = [p.gps_longitude for p in photos if p.gps_longitude]
+        
+        if not lats or not lons:
+            return None
+            
+        return {
+            'min_lat': min(lats),
+            'max_lat': max(lats),
+            'min_lon': min(lons),
+            'max_lon': max(lons),
+            'span_lat': max(lats) - min(lats),
+            'span_lon': max(lons) - min(lons)
+        }
 
 
 class InsightsTool:
@@ -431,7 +760,45 @@ class InsightsTool:
     async def _get_gear_recommendations(self) -> Dict[str, Any]:
         """Generate gear recommendations based on usage patterns."""
         # Get current gear statistics
-        stats = PhotoOperations.get_gear_statistics()
+        with get_session() as session:
+            # Get camera statistics
+            camera_stats = session.query(
+                Photo.camera_model,
+                func.count(Photo.id).label('count')
+            ).filter(
+                Photo.camera_model.isnot(None)
+            ).group_by(Photo.camera_model).order_by(func.count(Photo.id).desc()).all()
+            
+            # Get lens statistics
+            lens_stats = session.query(
+                Photo.lens_model,
+                func.count(Photo.id).label('count')
+            ).filter(
+                Photo.lens_model.isnot(None)
+            ).group_by(Photo.lens_model).order_by(func.count(Photo.id).desc()).all()
+            
+            # Get focal length distribution
+            fl_stats = session.query(
+                Photo.focal_length,
+                func.count(Photo.id).label('count')
+            ).filter(
+                Photo.focal_length.isnot(None)
+            ).group_by(Photo.focal_length).order_by(Photo.focal_length).all()
+            
+            stats = {
+                'cameras': [
+                    {'model': cam[0], 'count': cam[1]}
+                    for cam in camera_stats
+                ],
+                'lenses': [
+                    {'model': lens[0], 'count': lens[1]}
+                    for lens in lens_stats
+                ],
+                'focal_lengths': [
+                    {'focal_length': int(fl[0]), 'count': fl[1]}
+                    for fl in fl_stats if fl[0]
+                ]
+            }
         
         recommendations = []
         
@@ -480,19 +847,29 @@ class InsightsTool:
     
     async def _get_quality_improvements(self) -> Dict[str, Any]:
         """Generate quality improvement suggestions."""
-        # Analyze rejection patterns
+        # Analyze quality patterns
         with get_session() as session:
-            rejection_stats = session.query(
-                Photo.rejection_reason,
-                func.count(Photo.id).label('count')
-            ).filter(
-                Photo.rejection_reason.isnot(None)
-            ).group_by(Photo.rejection_reason).all()
+            # Get low-rated photos
+            low_rated = session.query(Photo).filter(
+                Photo.rating < 3
+            ).limit(100).all()
+            
+            # Analyze common issues
+            issue_counts = {}
+            for photo in low_rated:
+                if photo.meta_data and 'quality_issues' in photo.meta_data:
+                    for issue in photo.meta_data.get('quality_issues', []):
+                        issue_counts[issue] = issue_counts.get(issue, 0) + 1
+            
+            rejection_stats = [
+                (issue, count)
+                for issue, count in issue_counts.items()
+            ]
             
         improvements = []
         
         for reason, count in rejection_stats:
-            if reason == 'blurry' and count > 10:
+            if reason == 'blur' and count > 10:
                 improvements.append({
                     "issue": "Frequent blur issues",
                     "suggestions": [
@@ -501,7 +878,7 @@ class InsightsTool:
                         "Check focus calibration"
                     ]
                 })
-            elif reason == 'underexposed' and count > 10:
+            elif reason == 'underexposure' and count > 10:
                 improvements.append({
                     "issue": "Underexposure problems",
                     "suggestions": [
@@ -519,7 +896,24 @@ class InsightsTool:
     
     async def _get_shooting_pattern_insights(self) -> Dict[str, Any]:
         """Analyze and provide insights on shooting patterns."""
-        stats = PhotoOperations.get_shooting_statistics()
+        with get_session() as session:
+            # Calculate statistics
+            avg_stats = session.query(
+                func.avg(Photo.aperture).label('avg_aperture'),
+                func.avg(Photo.iso).label('avg_iso')
+            ).first()
+            
+            # Check for flash usage in metadata
+            total_photos = session.query(Photo).count()
+            flash_photos = session.query(Photo).filter(
+                Photo.meta_data['flash_used'] == True
+            ).count()
+            
+            stats = {
+                'average_aperture': float(avg_stats.avg_aperture) if avg_stats.avg_aperture else None,
+                'average_iso': int(avg_stats.avg_iso) if avg_stats.avg_iso else None,
+                'flash_percentage': round(flash_photos / total_photos * 100, 1) if total_photos else 0
+            }
         
         patterns = []
         

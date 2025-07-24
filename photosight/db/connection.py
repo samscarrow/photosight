@@ -1,71 +1,66 @@
 """
 Database connection management for PhotoSight.
 
-Handles SQLAlchemy engine creation, session management,
-and database initialization.
+Handles dual database architecture with Projects Database (multi-schema) 
+and Bay View Database (dedicated). Provides unified access to PhotoSight
+schema in Projects Database.
 """
 
 import logging
 from typing import Optional, Dict, Any
 from contextlib import contextmanager
-from sqlalchemy import create_engine, Engine, event
+from sqlalchemy import create_engine, Engine, event, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
 from .models import Base
+from .dual_database_manager import get_dual_database_manager
 
 logger = logging.getLogger(__name__)
 
-# Global engine and session factory
+# Global database manager and legacy compatibility
+_dual_manager = None
 _engine: Optional[Engine] = None
 _session_factory: Optional[sessionmaker] = None
 
 
 def configure_database(config: Dict[str, Any]) -> None:
     """
-    Configure database connection from PhotoSight config.
+    Configure database connection using dual database architecture.
     
     Args:
         config: PhotoSight configuration dictionary
     """
-    global _engine, _session_factory
+    global _dual_manager, _engine, _session_factory
     
     db_config = config.get('database', {})
     
     if not db_config.get('enabled', False):
         logger.info("Database integration disabled")
         return
-        
-    database_url = db_config.get('url')
-    if not database_url:
-        logger.error("Database URL not configured")
-        return
-        
-    # Create engine with connection pooling
-    engine_kwargs = {
-        'poolclass': QueuePool,
-        'pool_size': db_config.get('pool_size', 10),
-        'max_overflow': db_config.get('max_overflow', 20),
-        'pool_timeout': db_config.get('pool_timeout', 30),
-        'echo': db_config.get('echo_sql', False),
-        'future': True  # Use SQLAlchemy 2.0 style
-    }
     
     try:
-        _engine = create_engine(database_url, **engine_kwargs)
-        _session_factory = sessionmaker(bind=_engine, expire_on_commit=False)
+        # Initialize dual database manager
+        _dual_manager = get_dual_database_manager()
         
-        # Test connection
-        with _engine.connect() as conn:
-            conn.execute("SELECT 1")
+        # For backward compatibility, set up legacy connection to PhotoSight schema
+        with _dual_manager.get_projects_connection('photosight') as conn:
+            # Test connection
+            conn.execute(text("SELECT 1"))
         
-        logger.info("Database connection established successfully")
+        # Create legacy engine reference for compatibility
+        _engine = _dual_manager.projects_db._engines['photosight']
+        _session_factory = _dual_manager.projects_db._session_makers['photosight']
+        
+        logger.info("Dual database architecture configured successfully")
+        logger.info("PhotoSight using Projects Database - PHOTOSIGHT schema")
         
         # Auto-initialize if configured
         if db_config.get('auto_init', True):
             init_database()
             
     except Exception as e:
-        logger.error(f"Failed to configure database: {e}")
+        logger.error(f"Failed to configure dual database architecture: {e}")
+        _dual_manager = None
         _engine = None
         _session_factory = None
         raise
@@ -79,6 +74,38 @@ def get_engine() -> Optional[Engine]:
 def get_session_factory() -> Optional[sessionmaker]:
     """Get the session factory."""
     return _session_factory
+
+
+def get_dual_manager():
+    """Get the dual database manager instance."""
+    return _dual_manager
+
+
+def get_projects_session(schema: str = 'photosight'):
+    """
+    Get a session for Projects Database schema.
+    
+    Args:
+        schema: Schema name ('photosight', 'analytics', 'shared', 'admin')
+        
+    Returns:
+        Context manager for database session
+    """
+    if not _dual_manager:
+        raise RuntimeError("Database not configured. Call configure_database() first.")
+    return _dual_manager.get_projects_session(schema)
+
+
+def get_bayview_session():
+    """
+    Get a session for Bay View Database.
+    
+    Returns:
+        Context manager for database session
+    """
+    if not _dual_manager:
+        raise RuntimeError("Database not configured. Call configure_database() first.")
+    return _dual_manager.get_bayview_session()
 
 
 @contextmanager
@@ -155,7 +182,7 @@ def is_database_available() -> bool:
         
     try:
         with _engine.connect() as conn:
-            conn.execute("SELECT 1")
+            conn.execute(text("SELECT 1"))
         return True
     except Exception:
         return False

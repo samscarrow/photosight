@@ -62,13 +62,21 @@ raw_processing:
   max_rotation: 10.0
   preview_size: 800
   enable_scene_aware: true
+  # Early YOLO processing integration
+  enable_early_yolo: true
+  yolo_preview_stage: true
+  yolo_filter_threshold: 0.3  # Minimum score to continue processing
 
 # AI curation settings (Stage 2)
 ai_curation:
-  enabled: false  # Set to true to enable AI curation
+  enabled: true  # Set to true to enable AI curation
   yolo_model: "yolov8n.pt"  # Faster: yolov8n.pt, More accurate: yolov8l.pt
   min_ai_score: 0.5
   device: "cpu"  # "cpu" or "cuda" for GPU acceleration
+  # Early processing settings (moved to preview stage)
+  early_filtering: true
+  preview_processing: true
+  skip_full_processing_threshold: 0.3  # Skip full processing if score below this
   
   # Person detection
   person_detection:
@@ -81,6 +89,22 @@ ai_curation:
     min_face_size: 50  # Minimum face size in pixels
     enable_expression_detection: true
     enable_pose_analysis: true
+    
+  # Subject-aware blur analysis settings
+  blur_analysis:
+    enable_subject_aware: true          # Enable YOLO-enhanced blur analysis
+    subject_sharp_threshold: 80.0       # Minimum sharpness for priority subjects
+    subject_acceptable_threshold: 50.0  # Minimum acceptable subject sharpness
+    background_soft_threshold: 40.0     # Maximum for artistic background blur
+    motion_blur_uniformity: 0.7         # Uniformity threshold for motion blur
+    artistic_intent_weight: 0.8         # Weight for artistic blur classification
+    # Subject priority overrides (0.0-1.0)
+    subject_priorities:
+      person: 1.0      # People must be sharp
+      dog: 0.9         # Pets very high priority  
+      cat: 0.9         # Pets very high priority
+      bird: 0.8        # Animals high priority
+      car: 0.7         # Vehicles medium priority
     
   # Composition analysis
   composition:
@@ -111,18 +135,75 @@ similarity:
   similarity_threshold: 0.85  # Higher = more similar required
   time_window_seconds: 300    # Group photos taken within 5 minutes
   
-# Database settings
+# Sync settings for hybrid local/cloud architecture
+sync:
+  machine_id: null  # Auto-generated
+  verify_checksums: true
+  auto_detect_conflicts: true
+  cloud_storage_path: null
+
+# Database settings - Dual Database Architecture
 database:
   enabled: true
   # Use environment variables for sensitive credentials
   # Set PHOTOSIGHT_DATABASE_URL in your environment
   url: "${PHOTOSIGHT_DATABASE_URL}"
+  auto_init: false  # Don't auto-create tables with read-only user
+  
+  # Dual Database Architecture Configuration
+  dual_database:
+    # Projects Database (Multi-schema container)
+    projects_db:
+      wallet_location: "${PROJECTS_DB_WALLET_LOCATION}"
+      service_name: "${PROJECTS_DB_SERVICE_NAME}"
+      default_service: "photosightdb_high"
+      
+      # Schema configuration
+      schemas:
+        admin:
+          user: "ADMIN"
+          auth_type: "wallet"
+          description: "Database administration"
+        photosight:
+          user: "PHOTOSIGHT"
+          password: "${PHOTOSIGHT_SCHEMA_PASSWORD}"
+          auth_type: "password"
+          description: "PhotoSight application data"
+        analytics:
+          user: "ANALYTICS"
+          password: "${ANALYTICS_SCHEMA_PASSWORD}"
+          auth_type: "password"
+          description: "Cross-project analytics"
+        shared:
+          user: "SHARED"
+          password: "${SHARED_SCHEMA_PASSWORD}"
+          auth_type: "password"
+          description: "Shared utilities and reference data"
+    
+    # Bay View Database (Dedicated)
+    bayview_db:
+      wallet_location: "${BAYVIEW_DB_WALLET_LOCATION}"
+      service_name: "${BAYVIEW_DB_SERVICE_NAME}"
+      user: "ADMIN"
+      auth_type: "wallet"
+      description: "Dedicated Bay View database"
+      enabled: false  # Optional - only if Bay View is configured
+  
+  # Legacy Oracle configuration (deprecated - use dual_database instead)
+  oracle:
+    connection_high: "${ORACLE_DB_CONNECTION_HIGH}"
+    connection_medium: "${ORACLE_DB_CONNECTION_MEDIUM}"
+    connection_low: "${ORACLE_DB_CONNECTION_LOW}"
+    admin_user: "ADMIN"
+    admin_password: "${ORACLE_ADMIN_PASSWORD}"
+    wallet_location: "${ORACLE_WALLET_PATH}"
+    service_name: "photosightdb_medium"  # Default service for PhotoSight
   
   # MCP Server configuration
   mcp_server:
-    read_only_user: "photosight_readonly"
-    # Set PHOTOSIGHT_MCP_PASSWORD in your environment
-    read_only_password: "${PHOTOSIGHT_MCP_PASSWORD}"
+    # MCP server uses PhotoSight schema in Projects Database
+    schema: "photosight"
+    analytics_schema: "analytics"
     max_query_time: 30000  # 30 seconds
 
 # Logging settings

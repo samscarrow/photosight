@@ -6,12 +6,12 @@ Implements a secure, read-only interface for AI assistants to analyze photo meta
 generate statistics, and provide photography insights.
 """
 
-from .server import PhotoSightMCPServer
+from .server import main
 from .tools import QueryTool, StatisticsTool, InsightsTool
 from .resources import SchemaResource, MetadataResource
 
 __all__ = [
-    'PhotoSightMCPServer',
+    'main',
     'QueryTool',
     'StatisticsTool', 
     'InsightsTool',
