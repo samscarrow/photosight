@@ -216,12 +216,12 @@ logging:
 
 # Vision LLM Settings (EXPERIMENTAL)
 vision_llm:
-  enabled: false  # Opt-in feature - set to true to enable
+  enabled: true  # Opt-in feature - set to true to enable
   provider: "gemini"  # Options: gemini, claude, gpt4v, local
   
   # Provider-specific settings
   gemini:
-    model: "gemini-pro-vision"
+    model: "gemini-1.5-flash"
     safety_settings: "medium"  # low, medium, high
     temperature: 0.4
     max_output_tokens: 2048

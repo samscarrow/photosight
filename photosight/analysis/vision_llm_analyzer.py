@@ -210,6 +210,23 @@ class VisionLLMAnalyzer:
         else:
             raise ValueError(f"Unknown vision provider: {provider_name}")
     
+    def _clean_json_response(self, text: str) -> str:
+        """Clean JSON response from markdown code blocks."""
+        if not text:
+            return text
+        
+        # Remove markdown code block markers
+        text = text.strip()
+        if text.startswith('```json'):
+            text = text[7:]  # Remove ```json
+        elif text.startswith('```'):
+            text = text[3:]  # Remove ```
+        
+        if text.endswith('```'):
+            text = text[:-3]  # Remove closing ```
+        
+        return text.strip()
+    
     def analyze_scene(self, image_path: Union[str, Path]) -> Dict:
         """
         Analyze scene content using vision LLM.
@@ -236,7 +253,8 @@ class VisionLLMAnalyzer:
             # Parse JSON response
             if isinstance(result.get('content'), str):
                 try:
-                    result['parsed'] = json.loads(result['content'])
+                    cleaned_json = self._clean_json_response(result['content'])
+                    result['parsed'] = json.loads(cleaned_json)
                 except json.JSONDecodeError:
                     logger.warning("Failed to parse JSON response")
                     result['parsed'] = {}
@@ -274,7 +292,8 @@ class VisionLLMAnalyzer:
             # Parse JSON response
             if isinstance(result.get('content'), str):
                 try:
-                    result['parsed'] = json.loads(result['content'])
+                    cleaned_json = self._clean_json_response(result['content'])
+                    result['parsed'] = json.loads(cleaned_json)
                 except json.JSONDecodeError:
                     logger.warning("Failed to parse JSON response")
                     result['parsed'] = {}
@@ -312,7 +331,8 @@ class VisionLLMAnalyzer:
             # Parse JSON response
             if isinstance(result.get('content'), str):
                 try:
-                    result['parsed'] = json.loads(result['content'])
+                    cleaned_json = self._clean_json_response(result['content'])
+                    result['parsed'] = json.loads(cleaned_json)
                 except json.JSONDecodeError:
                     logger.warning("Failed to parse JSON response")
                     result['parsed'] = {}
@@ -346,7 +366,8 @@ class VisionLLMAnalyzer:
             # Parse JSON response
             if isinstance(result.get('content'), str):
                 try:
-                    result['parsed'] = json.loads(result['content'])
+                    cleaned_json = self._clean_json_response(result['content'])
+                    result['parsed'] = json.loads(cleaned_json)
                 except json.JSONDecodeError:
                     logger.warning("Failed to parse JSON response")
                     result['parsed'] = {}
@@ -379,7 +400,8 @@ class VisionLLMAnalyzer:
             # Parse JSON response
             if isinstance(result.get('content'), str):
                 try:
-                    result['parsed'] = json.loads(result['content'])
+                    cleaned_json = self._clean_json_response(result['content'])
+                    result['parsed'] = json.loads(cleaned_json)
                 except json.JSONDecodeError:
                     logger.warning("Failed to parse JSON response")
                     result['parsed'] = {}

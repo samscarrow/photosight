@@ -43,7 +43,7 @@ class GeminiVisionProvider:
         genai.configure(api_key=api_key)
         
         # Initialize model
-        model_name = config.get('model', 'gemini-pro-vision')
+        model_name = config.get('model', 'gemini-1.5-flash')
         self.model = genai.GenerativeModel(model_name)
         
         # Safety settings
