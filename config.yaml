@@ -213,3 +213,62 @@ logging:
   file: "processing.log"
   max_file_size: 10485760  # 10MB
   backup_count: 5
+
+# Vision LLM Settings (EXPERIMENTAL)
+vision_llm:
+  enabled: true  # Opt-in feature - set to true to enable
+  provider: "gemini"  # Options: gemini, claude, gpt4v, local
+  
+  # Provider-specific settings
+  gemini:
+    model: "gemini-1.5-flash"
+    safety_settings: "medium"  # low, medium, high
+    temperature: 0.4
+    max_output_tokens: 2048
+    
+  claude:
+    model: "claude-3-sonnet-20240229"
+    max_tokens: 1000
+    temperature: 0.3
+    
+  gpt4v:
+    model: "gpt-4-vision-preview"
+    max_tokens: 1000
+    
+  # Processing settings
+  processing:
+    use_previews: true  # Analyze smaller previews for speed
+    preview_size: 1024  # Max dimension for preview images
+    batch_size: 10      # Images to process in one batch
+    cache_results: true # Cache analysis results
+    timeout: 30         # Seconds before timing out
+    
+  # Privacy settings
+  privacy:
+    process_faces: false           # Don't analyze faces
+    blur_faces_before_analysis: true  # Blur faces if detected
+    local_only_mode: false         # Use only local models
+    strip_exif: true               # Remove EXIF before sending
+    
+  # Integration settings
+  integration:
+    enhance_scene_classification: true
+    enhance_composition_analysis: true
+    enhance_quality_ranking: true
+    generate_descriptions: false
+    detect_decisive_moments: true
+    suggest_intelligent_crops: false
+    
+  # Results fusion strategy
+  fusion:
+    strategy: "weighted"  # weighted, override, consensus, confidence_based
+    cv_weight: 0.7       # Traditional CV analysis weight
+    llm_weight: 0.3      # Vision LLM analysis weight
+    confidence_threshold: 0.8  # Min confidence to trust LLM
+    
+  # Performance optimization
+  optimization:
+    parallel_requests: 3      # Max concurrent LLM requests
+    retry_on_failure: true    # Retry failed requests
+    max_retries: 2           # Maximum retry attempts
+    fallback_to_cv: true     # Use CV-only if LLM fails
