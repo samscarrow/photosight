@@ -97,7 +97,7 @@ def rank(ctx, directory: str, project: Optional[str] = None, top_n: int = 50,
     """
     
     from photosight.ranking.quality_ranker import QualityRanker
-    from photosight.utils.file_operations import organize_photos
+    from photosight.utils.file_organizer import PhotoOrganizer
     
     config = ctx.obj.get('config', {})
     verbose = ctx.obj.get('verbose', False)
@@ -524,10 +524,11 @@ def organize(ctx, source_dir: str, dest_dir: str, structure: str, copy: bool,
 @click.option('--format', type=click.Choice(['table', 'json', 'summary']), default='summary',
               help='Output format')
 @click.option('--include-exif/--no-exif', default=False, help='Include detailed EXIF data')
+@click.option('--include-analysis/--no-analysis', default=True, help='Include quality analysis')
 @click.option('--group-by', type=click.Choice(['camera', 'lens', 'date', 'project']),
               help='Group statistics by field')
 @click.pass_context
-def stats(ctx, directory: str, format: str, include_exif: bool, group_by: Optional[str]):
+def stats(ctx, directory: str, format: str, include_exif: bool, include_analysis: bool, group_by: Optional[str]):
     """
     Generate comprehensive statistics for photo collections.
     
@@ -551,13 +552,29 @@ def stats(ctx, directory: str, format: str, include_exif: bool, group_by: Option
         stats_gen = StatsGenerator(config)
         directory_path = Path(directory)
         
+        # Find photo files
+        extensions = {'.jpg', '.jpeg', '.png', '.tiff', '.tif', '.raw', '.cr2', '.nef', '.arw'}
+        photo_files = []
+        
+        for ext in extensions:
+            photo_files.extend(directory_path.rglob(f"*{ext}"))
+            photo_files.extend(directory_path.rglob(f"*{ext.upper()}"))
+        
+        if not photo_files:
+            click.echo("❌ No photos found in directory", err=True)
+            return
+        
+        if not quiet:
+            click.echo(f"📸 Found {len(photo_files)} photos")
+        
         # Generate statistics
-        with click.progressbar(label="Analyzing photos") as bar:
+        with click.progressbar(photo_files, label="Analyzing photos") as bar:
             stats_data = stats_gen.generate_stats(
-                directory_path, 
+                photo_files, 
                 include_exif=include_exif,
+                include_analysis=include_analysis,
                 group_by=group_by,
-                progress_callback=bar.update
+                progress_callback=lambda current, total: bar.update(1)
             )
         
         # Output results
@@ -574,32 +591,50 @@ def stats(ctx, directory: str, format: str, include_exif: bool, group_by: Option
             if not quiet:
                 click.echo(f"\n📸 Photo Collection Summary")
                 click.echo("=" * 30)
-                click.echo(f"Total Photos: {stats_data['total_photos']}")
-                click.echo(f"Date Range: {stats_data['date_range']['earliest']} to {stats_data['date_range']['latest']}")
-                click.echo(f"Total Size: {stats_data['total_size_gb']:.2f} GB")
                 
-                if stats_data.get('cameras'):
+                collection_info = stats_data.get('collection_info', {})
+                click.echo(f"Total Photos: {collection_info.get('total_photos', 0)}")
+                
+                file_stats = stats_data.get('file_stats', {})
+                if file_stats.get('date_range'):
+                    date_range = file_stats['date_range']
+                    click.echo(f"Date Range: {date_range['earliest'][:10]} to {date_range['latest'][:10]}")
+                
+                total_mb = collection_info.get('total_size_mb', 0)
+                click.echo(f"Total Size: {total_mb / 1024:.2f} GB")
+                
+                exif_stats = stats_data.get('exif_stats', {})
+                if exif_stats.get('top_cameras'):
                     click.echo(f"\n📷 Top Cameras:")
-                    for camera, count in list(stats_data['cameras'].items())[:5]:
+                    for camera, count in list(exif_stats['top_cameras'].items())[:5]:
                         click.echo(f"  {camera}: {count} photos")
                 
-                if stats_data.get('lenses'):
+                if exif_stats.get('top_lenses'):
                     click.echo(f"\n🔍 Top Lenses:")
-                    for lens, count in list(stats_data['lenses'].items())[:5]:
+                    for lens, count in list(exif_stats['top_lenses'].items())[:5]:
                         click.echo(f"  {lens}: {count} photos")
                 
-                if stats_data.get('technical_stats'):
-                    tech = stats_data['technical_stats']
+                if exif_stats.get('iso_stats'):
+                    iso = exif_stats['iso_stats']
                     click.echo(f"\n⚙️  Technical Averages:")
-                    click.echo(f"  ISO: {tech['avg_iso']:.0f}")
-                    click.echo(f"  Aperture: f/{tech['avg_aperture']:.1f}")
-                    click.echo(f"  Focal Length: {tech['avg_focal_length']:.0f}mm")
+                    click.echo(f"  ISO: {iso['avg']:.0f}")
+                    
+                if exif_stats.get('aperture_stats'):
+                    aperture = exif_stats['aperture_stats']
+                    click.echo(f"  Aperture: f/{aperture['avg']:.1f}")
+                    
+                if exif_stats.get('focal_length_stats'):
+                    focal = exif_stats['focal_length_stats']
+                    click.echo(f"  Focal Length: {focal['avg']:.0f}mm")
                 
-                if stats_data.get('quality_stats'):
-                    quality = stats_data['quality_stats']
+                quality_stats = stats_data.get('quality_stats', {})
+                if quality_stats and not quality_stats.get('error'):
                     click.echo(f"\n⭐ Quality Metrics:")
-                    click.echo(f"  Average Rating: {quality['avg_rating']:.2f}")
-                    click.echo(f"  Top Rated (>0.8): {quality['high_quality_count']} photos")
+                    click.echo(f"  Average Quality: {quality_stats.get('average_quality', 0):.3f}")
+                    distribution = quality_stats.get('quality_distribution', {})
+                    excellent = distribution.get('Excellent', 0)
+                    very_good = distribution.get('Very Good', 0)
+                    click.echo(f"  High Quality (Excellent + Very Good): {excellent + very_good} photos")
         
     except Exception as e:
         click.echo(f"❌ Error generating statistics: {e}", err=True)

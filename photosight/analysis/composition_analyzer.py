@@ -246,8 +246,13 @@ class CompositionAnalyzer:
             left_mass = np.sum(left_half)
             right_mass = np.sum(right_half)
             
-            if left_mass + right_mass > 0:
-                lr_balance = 1.0 - abs(left_mass - right_mass) / (left_mass + right_mass)
+            # Convert to float to prevent overflow
+            left_mass_f = float(left_mass)
+            right_mass_f = float(right_mass)
+            denominator = left_mass_f + right_mass_f
+            
+            if denominator > 0:
+                lr_balance = 1.0 - abs(left_mass_f - right_mass_f) / denominator
             else:
                 lr_balance = 1.0
             
@@ -258,8 +263,13 @@ class CompositionAnalyzer:
             top_mass = np.sum(top_half)
             bottom_mass = np.sum(bottom_half)
             
-            if top_mass + bottom_mass > 0:
-                tb_balance = 1.0 - abs(top_mass - bottom_mass) / (top_mass + bottom_mass)
+            # Convert to float to prevent overflow
+            top_mass_f = float(top_mass)
+            bottom_mass_f = float(bottom_mass)
+            denominator = top_mass_f + bottom_mass_f
+            
+            if denominator > 0:
+                tb_balance = 1.0 - abs(top_mass_f - bottom_mass_f) / denominator
             else:
                 tb_balance = 1.0
             

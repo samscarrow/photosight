@@ -48,6 +48,9 @@ create_or_update_secret() {
 # Setup Anthropic API Key
 create_or_update_secret "Anthropic API Key" "credential"
 
+# Setup Gemini API Key
+create_or_update_secret "Google AI API Key" "credential"
+
 # Setup OpenAI API Key (if needed for comparison models)
 echo "Do you need to store an OpenAI API key? (y/n)"
 read -r setup_openai
@@ -68,11 +71,13 @@ cat > .env.example << 'EOF'
 # Photosight Environment Variables
 # Use 1Password CLI to retrieve actual values:
 # export ANTHROPIC_API_KEY=$(op read "op://Personal/Anthropic API Key/credential")
+# export GEMINI_API_KEY=$(op read "op://Personal/Google AI API Key/credential")
 # export OPENAI_API_KEY=$(op read "op://Personal/OpenAI API Key/credential")
 # export VERCEL_TOKEN=$(op read "op://Personal/Vercel Token/token")
 
 # API Configuration
 ANTHROPIC_API_KEY=your_anthropic_api_key_here
+GEMINI_API_KEY=your_gemini_api_key_here
 OPENAI_API_KEY=your_openai_api_key_here
 
 # Hosting Configuration
@@ -115,6 +120,14 @@ if op item get "Anthropic API Key" &> /dev/null; then
     echo "✅ Loaded ANTHROPIC_API_KEY"
 else
     echo "⚠️ Anthropic API Key not found in 1Password"
+fi
+
+# Load Gemini API Key
+if op item get "Google AI API Key" &> /dev/null; then
+    export GEMINI_API_KEY=$(op read "op://Personal/Google AI API Key/credential")
+    echo "✅ Loaded GEMINI_API_KEY"
+else
+    echo "⚠️ Google AI API Key not found in 1Password"
 fi
 
 # Load OpenAI API Key (optional)

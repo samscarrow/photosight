@@ -1,21 +1,27 @@
 #!/usr/bin/env node
 
 /**
- * Claude Code Review for Photosight Pull Requests
- * Analyzes PR changes and provides intelligent code review using Claude API
+ * LLM Code Review for Photosight Pull Requests
+ * Analyzes PR changes and provides intelligent code review using configurable LLM providers
+ * Supports: Anthropic Claude, Google Gemini
  */
 
-const { Anthropic } = require('@anthropic-ai/sdk');
+const { llmManager } = require('./llm-providers');
 const { execSync } = require('child_process');
 const fs = require('fs');
 require('dotenv').config();
 
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
-
-async function reviewPullRequest(prNumber) {
-  console.log(`🤖 Starting Claude Code review for Photosight PR #${prNumber}`);
+async function reviewPullRequest(prNumber, options = {}) {
+  const { provider = null } = options;
+  
+  // Check available providers
+  const availableProviders = llmManager.getAvailableProviders();
+  if (availableProviders.length === 0) {
+    throw new Error('No LLM providers configured. Please set ANTHROPIC_API_KEY or GEMINI_API_KEY');
+  }
+  
+  const selectedProvider = provider || availableProviders[0];
+  console.log(`🤖 Starting LLM Code review for Photosight PR #${prNumber} using ${selectedProvider}`);
 
   try {
     // Get PR information
@@ -148,17 +154,15 @@ ${hasImageFiles ? `
 Skip generic observations - provide actionable feedback only.
 `;
 
-    // Get Claude's review
-    const response = await anthropic.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
-      max_tokens: 4000,
-      messages: [{
-        role: 'user',
-        content: reviewPrompt
-      }]
+    // Get LLM review
+    const response = await llmManager.generateContent(reviewPrompt, {
+      provider: selectedProvider,
+      maxTokens: 4000,
+      temperature: 0.7
     });
 
-    const reviewContent = response.content[0].text;
+    const reviewContent = response.content;
+    console.log(`✨ Review generated using ${response.provider} (${response.model})`);
 
     // Post review comment via GitHub CLI
     const reviewFile = `/tmp/claude-review-${prNumber}.md`;
@@ -170,7 +174,7 @@ Skip generic observations - provide actionable feedback only.
     // Clean up
     fs.unlinkSync(reviewFile);
 
-    console.log(`✅ Claude Code review posted for PR #${prNumber}`);
+    console.log(`✅ LLM Code review posted for PR #${prNumber} (${response.provider})`);
 
     // Extract overall assessment
     const assessment = reviewContent.toLowerCase().includes('request_changes') ? 'REQUEST_CHANGES' :
@@ -180,14 +184,17 @@ Skip generic observations - provide actionable feedback only.
       prNumber,
       assessment,
       reviewPosted: true,
-      hasImageFiles
+      hasImageFiles,
+      provider: response.provider,
+      model: response.model,
+      usage: response.usage
     };
 
   } catch (error) {
     console.error(`❌ Error reviewing PR #${prNumber}:`, error.message);
     
     // Post error comment
-    const errorComment = `🤖 Claude Code Review Error
+    const errorComment = `🤖 LLM Code Review Error
 
 Sorry, I encountered an error while reviewing this PR:
 \`\`\`
@@ -208,21 +215,37 @@ Please check the workflow logs for more details.`;
 
 // Main execution
 async function main() {
-  const prNumber = process.argv[2];
+  const args = process.argv.slice(2);
+  const prNumber = args[0];
+  const provider = args[1]; // Optional provider argument
   
   if (!prNumber) {
-    console.error('❌ Usage: node claude-review-pr.js <pr_number>');
+    console.error('❌ Usage: node claude-review-pr.js <pr_number> [provider]');
+    console.error('   Providers: anthropic, gemini');
+    console.error('   Environment variables: ANTHROPIC_API_KEY, GEMINI_API_KEY');
     process.exit(1);
   }
 
-  if (!process.env.ANTHROPIC_API_KEY) {
-    console.error('❌ ANTHROPIC_API_KEY environment variable required');
-    console.log('💡 Use: op read "op://Personal/Anthropic API/credential" or set via git secrets');
+  // Check available providers
+  const availableProviders = llmManager.getAvailableProviders();
+  if (availableProviders.length === 0) {
+    console.error('❌ No LLM providers configured');
+    console.error('💡 Set ANTHROPIC_API_KEY and/or GEMINI_API_KEY environment variables');
+    console.error('💡 Anthropic: op read "op://Personal/Anthropic API/credential"');
+    console.error('💡 Gemini: op read "op://Personal/Google AI API/credential"');
+    process.exit(1);
+  }
+
+  console.log(`🔧 Available providers: ${availableProviders.join(', ')}`);
+  
+  if (provider && !availableProviders.includes(provider)) {
+    console.error(`❌ Provider '${provider}' not available or not configured`);
+    console.error(`💡 Available: ${availableProviders.join(', ')}`);
     process.exit(1);
   }
 
   try {
-    const result = await reviewPullRequest(prNumber);
+    const result = await reviewPullRequest(prNumber, { provider });
     console.log('🎉 Review completed:', result);
     
     if (result.hasImageFiles) {

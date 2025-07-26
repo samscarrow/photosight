@@ -94,12 +94,22 @@ class QualityRanker:
             return 0.0
         
         try:
-            # Load image for analysis
-            image = Image.open(photo_path)
+            # Load image for analysis - handle RAW files
+            image = self._load_image(photo_path)
             
             # Convert to RGB if needed
             if image.mode != 'RGB':
                 image = image.convert('RGB')
+            
+            # Convert to numpy array - prepare both formats for different analyzers
+            import numpy as np
+            # Start with uint8 array (0-255 range)
+            image_array_uint8 = np.array(image, dtype=np.uint8)
+            # Ensure proper shape and contiguous memory layout for OpenCV
+            if len(image_array_uint8.shape) == 3 and image_array_uint8.shape[2] == 3:
+                image_array_uint8 = np.ascontiguousarray(image_array_uint8, dtype=np.uint8)
+            # Float32 normalized array for advanced processing (0.0-1.0 range)
+            image_array_float = image_array_uint8.astype(np.float32) / 255.0
             
             scores = {}
             
@@ -111,25 +121,26 @@ class QualityRanker:
                 logger.warning(f"Technical analysis failed for {photo_path}: {e}")
                 scores['technical'] = 0.5  # Default score
             
-            # Composition analysis
+            # Composition analysis (needs uint8 for OpenCV edge detection)
             try:
-                composition_score = self._analyze_composition(image)
+                composition_score = self._analyze_composition(image_array_uint8)
                 scores['composition'] = composition_score
             except Exception as e:
                 logger.warning(f"Composition analysis failed for {photo_path}: {e}")
                 scores['composition'] = 0.5
             
-            # Aesthetic analysis
+            # Aesthetic analysis (needs uint8 for OpenCV operations)
             try:
-                aesthetic_score = self._analyze_aesthetics(image)
+                logger.debug(f"Aesthetic analysis - array dtype: {image_array_uint8.dtype}, shape: {image_array_uint8.shape}")
+                aesthetic_score = self._analyze_aesthetics(image_array_uint8)
                 scores['aesthetic'] = aesthetic_score
             except Exception as e:
                 logger.warning(f"Aesthetic analysis failed for {photo_path}: {e}")
                 scores['aesthetic'] = 0.5
             
-            # Subject analysis
+            # Subject analysis (can use float32 for ML models)
             try:
-                subject_score = self._analyze_subjects(image, photo_path)
+                subject_score = self._analyze_subjects(image_array_float, photo_path)
                 scores['subject'] = subject_score
             except Exception as e:
                 logger.warning(f"Subject analysis failed for {photo_path}: {e}")
@@ -183,7 +194,7 @@ class QualityRanker:
     def _analyze_technical_quality(self, image: Image.Image, photo_path: Path) -> float:
         """Analyze technical quality aspects."""
         try:
-            analysis = self.technical_analyzer.analyze_photo(photo_path)
+            analysis = self.technical_analyzer.analyze_photo(image, photo_path)
             
             # Combine technical metrics
             sharpness = analysis.get('sharpness', 0) / 1000.0  # Normalize
@@ -205,11 +216,10 @@ class QualityRanker:
             logger.warning(f"Technical analysis error: {e}")
             return 0.5
     
-    def _analyze_composition(self, image: Image.Image) -> float:
+    def _analyze_composition(self, img_array: np.ndarray) -> float:
         """Analyze composition quality."""
         try:
-            # Convert PIL Image to numpy array
-            img_array = np.array(image)
+            # img_array is a uint8 numpy array for OpenCV compatibility
             
             analysis = self.composition_analyzer.analyze_composition(img_array)
             
@@ -233,11 +243,10 @@ class QualityRanker:
             logger.warning(f"Composition analysis error: {e}")
             return 0.5
     
-    def _analyze_aesthetics(self, image: Image.Image) -> float:
+    def _analyze_aesthetics(self, img_array: np.ndarray) -> float:
         """Analyze aesthetic quality using AI models."""
         try:
-            # Convert PIL Image to numpy array
-            img_array = np.array(image)
+            # img_array is a uint8 numpy array for OpenCV compatibility
             
             analysis = self.aesthetic_analyzer.analyze_aesthetics(img_array)
             
@@ -261,11 +270,10 @@ class QualityRanker:
             logger.warning(f"Aesthetic analysis error: {e}")
             return 0.5
     
-    def _analyze_subjects(self, image: Image.Image, photo_path: Path) -> float:
+    def _analyze_subjects(self, img_array: np.ndarray, photo_path: Path) -> float:
         """Analyze subject quality and focus."""
         try:
-            # Convert PIL Image to numpy array
-            img_array = np.array(image)
+            # img_array is a normalized float32 numpy array for ML models
             
             analysis = self.subject_analyzer.analyze_photo(img_array)
             
@@ -362,3 +370,94 @@ class QualityRanker:
                 'file_path': str(photo_path),
                 'file_name': photo_path.name
             }
+    
+    def _load_image(self, photo_path: Path) -> Image.Image:
+        """
+        Load image file handling both standard formats and RAW files.
+        
+        Args:
+            photo_path: Path to the image file
+            
+        Returns:
+            PIL Image object
+        """
+        file_ext = photo_path.suffix.lower()
+        
+        # Check if it's a RAW file
+        raw_extensions = {'.arw', '.cr2', '.nef', '.dng', '.raf', '.orf', '.rw2', '.pef', '.srw'}
+        
+        if file_ext in raw_extensions:
+            try:
+                import rawpy
+                logger.debug(f"Processing RAW file: {photo_path}")
+                
+                # Open RAW file
+                with rawpy.imread(str(photo_path)) as raw:
+                    # Process to RGB array
+                    rgb_array = raw.postprocess(
+                        use_camera_wb=True,        # Use camera white balance
+                        half_size=True,            # Use half-size for faster processing
+                        no_auto_bright=True,       # Disable auto brightness
+                        output_bps=8               # 8-bit output for compatibility
+                    )
+                
+                # Convert numpy array to PIL Image
+                image = Image.fromarray(rgb_array)
+                logger.debug(f"Successfully processed RAW file: {photo_path}")
+                return image
+                
+            except ImportError:
+                logger.warning("rawpy not available, trying to extract embedded JPEG from RAW")
+                return self._extract_raw_preview(photo_path)
+            except Exception as e:
+                logger.warning(f"RAW processing failed for {photo_path}: {e}, trying preview extraction")
+                return self._extract_raw_preview(photo_path)
+        else:
+            # Standard image file
+            return Image.open(photo_path)
+    
+    def _extract_raw_preview(self, photo_path: Path) -> Image.Image:
+        """
+        Extract embedded JPEG preview from RAW file as fallback.
+        
+        Args:
+            photo_path: Path to the RAW file
+            
+        Returns:
+            PIL Image object from embedded preview
+        """
+        try:
+            # Try to open as TIFF and extract embedded JPEG
+            from PIL import TiffImagePlugin
+            
+            img = Image.open(photo_path)
+            
+            # Try to get the JPEG interchange format
+            if hasattr(img, 'tag') and img.tag:
+                # Look for JPEG interchange format in TIFF tags
+                jpeg_offset = img.tag.get(513)  # JPEGInterchangeFormat
+                jpeg_length = img.tag.get(514)  # JPEGInterchangeFormatLength
+                
+                if jpeg_offset and jpeg_length:
+                    # Extract JPEG data
+                    with open(photo_path, 'rb') as f:
+                        f.seek(jpeg_offset[0] if isinstance(jpeg_offset, tuple) else jpeg_offset)
+                        jpeg_data = f.read(jpeg_length[0] if isinstance(jpeg_length, tuple) else jpeg_length)
+                    
+                    # Create PIL Image from JPEG data
+                    from io import BytesIO
+                    jpeg_image = Image.open(BytesIO(jpeg_data))
+                    logger.debug(f"Extracted embedded JPEG from RAW: {photo_path}")
+                    return jpeg_image
+            
+            # If that fails, try to use the image as-is (might work for some RAW formats)
+            if img.mode in ['RGB', 'L', 'P']:
+                return img
+            else:
+                # Convert to RGB
+                return img.convert('RGB')
+                
+        except Exception as e:
+            logger.error(f"Failed to extract preview from RAW file {photo_path}: {e}")
+            # Return a black image as last resort
+            return Image.new('RGB', (640, 480), color='black')

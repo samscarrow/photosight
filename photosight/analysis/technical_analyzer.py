@@ -32,21 +32,27 @@ class TechnicalAnalyzer:
         self.config = config
         self.analysis_config = config.get('technical_analysis', {})
         
-    def analyze_photo(self, photo_path: Union[str, Path]) -> Dict:
+    def analyze_photo(self, photo_input: Union[str, Path, Image.Image], photo_path: Optional[Union[str, Path]] = None) -> Dict:
         """
         Perform comprehensive technical analysis of a photo.
         
         Args:
-            photo_path: Path to the photo file
+            photo_input: Either a path to the photo file OR a PIL Image object
+            photo_path: Optional path for metadata (used when photo_input is an Image)
             
         Returns:
             Dictionary containing technical analysis results
         """
-        photo_path = Path(photo_path)
-        
         try:
-            # Load image
-            image = Image.open(photo_path)
+            # Handle both file path and Image object inputs
+            if isinstance(photo_input, Image.Image):
+                image = photo_input
+                # If photo_path not provided, use a default name for logging
+                file_path = Path(photo_path) if photo_path else Path("unknown_image")
+            else:
+                # Traditional file path input
+                file_path = Path(photo_input)
+                image = Image.open(file_path)
             
             # Convert to RGB if needed
             if image.mode != 'RGB':
@@ -57,8 +63,8 @@ class TechnicalAnalyzer:
             
             # Perform various technical analyses
             results = {
-                'file_path': str(photo_path),
-                'file_name': photo_path.name,
+                'file_path': str(file_path),
+                'file_name': file_path.name,
                 'image_dimensions': {
                     'width': image.width,
                     'height': image.height,
@@ -97,11 +103,17 @@ class TechnicalAnalyzer:
             return results
             
         except Exception as e:
-            logger.error(f"Error analyzing photo {photo_path}: {e}")
+            # Handle error logging for both input types
+            if isinstance(photo_input, Image.Image):
+                error_path = photo_path if photo_path else "unknown_image"
+            else:
+                error_path = photo_input
+            
+            logger.error(f"Error analyzing photo {error_path}: {e}")
             return {
                 'error': str(e),
-                'file_path': str(photo_path),
-                'file_name': photo_path.name,
+                'file_path': str(error_path),
+                'file_name': Path(error_path).name if error_path != "unknown_image" else "unknown_image",
                 'technical_quality': 0.0
             }
     
@@ -235,9 +247,10 @@ class TechnicalAnalyzer:
             mean_val = np.mean(gray)
             rms_contrast = np.sqrt(np.mean((gray - mean_val) ** 2))
             
-            # Michelson contrast
-            if max_val + min_val > 0:
-                michelson_contrast = (max_val - min_val) / (max_val + min_val)
+            # Michelson contrast with overflow protection
+            denominator = float(max_val) + float(min_val)
+            if denominator > 0:
+                michelson_contrast = float(max_val - min_val) / denominator
             else:
                 michelson_contrast = 0.0
             

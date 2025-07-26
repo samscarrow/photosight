@@ -87,9 +87,21 @@ class AestheticAnalyzer:
             Dictionary with color harmony analysis
         """
         try:
-            # Convert to different color spaces
-            hsv = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
-            lab = cv2.cvtColor(img_array, cv2.COLOR_RGB2LAB)
+            # Ensure proper data type for OpenCV operations
+            img_array = self._ensure_uint8_format(img_array)
+            
+            # Convert to different color spaces with additional error handling
+            try:
+                hsv = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
+                lab = cv2.cvtColor(img_array, cv2.COLOR_RGB2LAB)
+            except cv2.error as e:
+                if "VDepth::contains(depth)" in str(e):
+                    # OpenCV depth issue - create a fresh contiguous array
+                    img_array = np.array(img_array, dtype=np.uint8, copy=True)
+                    hsv = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
+                    lab = cv2.cvtColor(img_array, cv2.COLOR_RGB2LAB)
+                else:
+                    raise
             
             # Extract dominant colors using K-means clustering
             pixels = img_array.reshape(-1, 3)
@@ -345,8 +357,10 @@ class AestheticAnalyzer:
             # Michelson contrast
             min_val = np.min(gray)
             max_val = np.max(gray)
-            if max_val + min_val > 0:
-                michelson_contrast = (max_val - min_val) / (max_val + min_val)
+            # Michelson contrast with overflow protection
+            denominator = float(max_val) + float(min_val)
+            if denominator > 0:
+                michelson_contrast = float(max_val - min_val) / denominator
             else:
                 michelson_contrast = 0.0
             
@@ -431,6 +445,9 @@ class AestheticAnalyzer:
             Dictionary with saturation analysis
         """
         try:
+            # Ensure proper data type for OpenCV operations
+            img_array = self._ensure_uint8_format(img_array)
+            
             # Convert to HSV
             hsv = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
             saturation = hsv[:, :, 1]
@@ -488,6 +505,9 @@ class AestheticAnalyzer:
             Vibrancy score (0.0-1.0)
         """
         try:
+            # Ensure proper data type for OpenCV operations
+            img_array = self._ensure_uint8_format(img_array)
+            
             # Convert to HSV
             hsv = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
             saturation = hsv[:, :, 1].astype(float) / 255.0
@@ -519,6 +539,9 @@ class AestheticAnalyzer:
             Dictionary with mood analysis
         """
         try:
+            # Ensure proper data type for OpenCV operations
+            img_array = self._ensure_uint8_format(img_array)
+            
             # Convert to different color spaces
             hsv = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
             gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
@@ -626,3 +649,29 @@ class AestheticAnalyzer:
         except Exception as e:
             logger.warning(f"Aesthetic score calculation error: {e}")
             return 0.5
+    
+    def _ensure_uint8_format(self, img_array: np.ndarray) -> np.ndarray:
+        """
+        Ensure image array is in proper uint8 format for OpenCV operations.
+        
+        Args:
+            img_array: Input image array
+            
+        Returns:
+            Image array in uint8 format (0-255 range)
+        """
+        # Check current data type
+        if img_array.dtype == np.uint8:
+            return np.ascontiguousarray(img_array)
+        elif img_array.dtype == np.float32 or img_array.dtype == np.float64:
+            # Assume normalized float (0.0-1.0) and convert to uint8 (0-255)
+            if img_array.max() <= 1.0:
+                img_array = (img_array * 255).astype(np.uint8)
+            else:
+                # Already in 0-255 range, just convert type
+                img_array = np.clip(img_array, 0, 255).astype(np.uint8)
+        else:
+            # Handle other types by converting to uint8
+            img_array = np.clip(img_array, 0, 255).astype(np.uint8)
+        
+        return np.ascontiguousarray(img_array)

@@ -24,6 +24,7 @@
   "homepage": "https://github.com/samscarrow/photosight#readme",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.57.0",
+    "@google/genai": "^1.11.0",
     "dotenv": "^17.2.0"
   }
 }
