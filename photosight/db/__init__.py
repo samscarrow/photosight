@@ -4,10 +4,15 @@ PhotoSight Database Module
 Provides database models, operations, and connection management.
 """
 
-from .connection import configure_database, get_session, get_session_factory, get_engine
+from .connection import configure_database, get_session, get_session_factory, get_engine, get_projects_session
 from .models import *
 from .operations import PhotoOperations, ProjectOperations, TaskOperations, BatchSession
-from .recipe_manager import RecipeManager
+
+# Skip heavy processing imports for MCP server
+try:
+    from .recipe_manager import RecipeManager
+except ImportError:
+    RecipeManager = None
 
 # Check if database is available
 def is_database_available() -> bool:
@@ -23,12 +28,12 @@ __all__ = [
     'get_session', 
     'get_session_factory',
     'get_engine',
+    'get_projects_session',
     'is_database_available',
     'PhotoOperations',
     'ProjectOperations', 
     'TaskOperations',
     'BatchSession',
-    'RecipeManager',
     # Models
     'Project',
     'Task', 
@@ -49,3 +54,7 @@ __all__ = [
     'project_photos',
     'photo_tasks'
 ]
+
+# Add RecipeManager only if available
+if RecipeManager is not None:
+    __all__.append('RecipeManager')

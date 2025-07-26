@@ -37,24 +37,25 @@ class ProjectsDatabaseManager:
             'schemas': {
                 'admin': {
                     'user': 'ADMIN',
-                    'auth_type': 'wallet',
+                    'password': os.getenv('ORACLE_ADMIN_PASSWORD', os.getenv('ORACLE_PASSWORD', '')),
+                    'auth_type': 'password' if os.getenv('ORACLE_ADMIN_PASSWORD') or os.getenv('ORACLE_PASSWORD') else 'wallet',
                     'description': 'Database administration'
                 },
                 'photosight': {
                     'user': 'PHOTOSIGHT',
-                    'password': 'PhotoApp2024!',
+                    'password': os.getenv('PHOTOSIGHT_SCHEMA_PASSWORD', 'PhotoApp2024!'),
                     'auth_type': 'password',
                     'description': 'PhotoSight application'
                 },
                 'analytics': {
                     'user': 'ANALYTICS', 
-                    'password': 'Analytics2024!',
+                    'password': os.getenv('ANALYTICS_SCHEMA_PASSWORD', 'Analytics2024!'),
                     'auth_type': 'password',
                     'description': 'Cross-project analytics'
                 },
                 'shared': {
                     'user': 'SHARED',
-                    'password': 'Shared2024!',
+                    'password': os.getenv('SHARED_SCHEMA_PASSWORD', 'Shared2024!'),
                     'auth_type': 'password', 
                     'description': 'Shared utilities and reference data'
                 }
@@ -79,7 +80,10 @@ class ProjectsDatabaseManager:
                 else:
                     user = schema_config['user']
                     password = schema_config['password']
-                    connection_string = f"oracle+oracledb://{user}:{password}@{self.config['service_name']}"
+                    # Use URL encoding for special characters in password
+                    from urllib.parse import quote_plus
+                    encoded_password = quote_plus(password)
+                    connection_string = f"oracle+oracledb://{user}:{encoded_password}@{self.config['service_name']}"
                 
                 # Create engine
                 engine = create_engine(
@@ -99,8 +103,13 @@ class ProjectsDatabaseManager:
                 self._session_makers[schema_name] = sessionmaker(bind=engine)
                 
             except Exception as e:
-                logger.error(f"❌ Projects DB - Failed to connect to {schema_name} schema: {e}")
-                raise
+                logger.warning(f"⚠️ Projects DB - Failed to connect to {schema_name} schema: {e}")
+                # For MCP server, continue without optional schemas
+                if schema_name in ['shared']:  # Optional schemas
+                    logger.info(f"Continuing without optional {schema_name} schema")
+                    continue
+                else:
+                    raise
     
     @contextmanager
     def get_session(self, schema: str = 'photosight'):

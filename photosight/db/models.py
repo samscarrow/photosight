@@ -381,12 +381,14 @@ class AnalysisResult(Base):
     photo = relationship("Photo", back_populates="analysis_results")
     camera_profile_used = relationship("CameraProfile", foreign_keys=[camera_profile_used_id])
     
-    # Composite index for efficient queries
+    # Composite indexes for efficient queries
     __table_args__ = (
         Index('idx_analysis_type_scores', 'analysis_type', 'overall_ai_score', 'sharpness_score'),
         Index('idx_analysis_wb_temp_confidence', 'wb_estimated_temp', 'wb_confidence'),
         Index('idx_analysis_clipping', 'highlight_clipping', 'shadow_clipping'),
         Index('idx_analysis_processing_time', 'processing_time_ms', 'created_at'),
+        # Critical index for window function performance
+        Index('idx_analysis_photo_id_desc', 'photo_id', 'id', postgresql_using='btree'),
     )
 
 

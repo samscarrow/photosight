@@ -25,6 +25,7 @@ from photosight.processing.tone.exposure_optimizer import ExposureOptimizer, Exp
 from photosight.processing.color.white_balance import WhiteBalanceCorrector, WhiteBalanceAnalysis, WhiteBalanceMethod
 from photosight.processing.color.color_grading import ColorGrader, ColorGradingSettings, ColorGradingPreset
 from photosight.processing.yolo_integration import analyze_preview_yolo, YOLOAnalysis
+from photosight.processing.local_adjustments import AdjustmentLayer, MaskData
 
 logger = logging.getLogger(__name__)
 
@@ -197,16 +198,55 @@ class ProcessingRecipe:
     version: str = "1.0"
     notes: Optional[str] = None
     
+    # Local adjustments
+    adjustment_layers: List[AdjustmentLayer] = field(default_factory=list)
+    
+    # Noise reduction
+    noise_reduction: Optional['NoiseReductionSettings'] = None
+    
     def to_json(self) -> str:
         """Serialize recipe to JSON"""
         data = asdict(self)
         data['created_at'] = data.get('created_at') or datetime.now().isoformat()
+        
+        # Convert adjustment layers to dictionaries
+        if 'adjustment_layers' in data and data['adjustment_layers']:
+            data['adjustment_layers'] = [
+                layer.to_dict() if hasattr(layer, 'to_dict') else layer
+                for layer in self.adjustment_layers
+            ]
+        
+        # Convert noise reduction settings to dict
+        if 'noise_reduction' in data and data['noise_reduction']:
+            nr_dict = asdict(self.noise_reduction)
+            # Convert enum to string for JSON serialization
+            if 'edge_preservation_method' in nr_dict:
+                nr_dict['edge_preservation_method'] = nr_dict['edge_preservation_method'].value
+            data['noise_reduction'] = nr_dict
+        
         return json.dumps(data, indent=2)
     
     @classmethod
     def from_json(cls, json_str: str) -> 'ProcessingRecipe':
         """Deserialize recipe from JSON"""
         data = json.loads(json_str)
+        
+        # Convert adjustment layer dictionaries back to objects
+        if 'adjustment_layers' in data and data['adjustment_layers']:
+            data['adjustment_layers'] = [
+                AdjustmentLayer.from_dict(layer) if isinstance(layer, dict) else layer
+                for layer in data['adjustment_layers']
+            ]
+        
+        # Convert noise reduction dict back to object
+        if 'noise_reduction' in data and data['noise_reduction']:
+            from photosight.processing.noise import NoiseReductionSettings, EdgePreservationMethod
+            nr_data = data['noise_reduction']
+            # Convert string back to enum
+            if 'edge_preservation_method' in nr_data and isinstance(nr_data['edge_preservation_method'], str):
+                nr_data['edge_preservation_method'] = EdgePreservationMethod(nr_data['edge_preservation_method'])
+            data['noise_reduction'] = NoiseReductionSettings(**nr_data)
+        
         return cls(**data)
     
     def save(self, path: Path) -> None:
@@ -793,7 +833,9 @@ class RawPostProcessor:
         2. Exposure Optimization  
         3. Color Grading
         4. Tone Adjustments
-        5. Local Adjustments
+        5. Local Adjustments (clarity, texture, vignette)
+        6. Layer-Based Local Adjustments
+        7. Noise Reduction
         
         Args:
             rgb: Float32 RGB image (0-1 range)
@@ -979,6 +1021,36 @@ class RawPostProcessor:
         # Vignette correction/application
         if recipe.vignette_amount != 0:
             rgb = self._apply_vignette(rgb, recipe.vignette_amount)
+        
+        # 6. LAYER-BASED LOCAL ADJUSTMENTS
+        if recipe.adjustment_layers:
+            logger.debug(f"  - Applying {len(recipe.adjustment_layers)} adjustment layers...")
+            from photosight.processing.local_adjustments import LocalAdjustmentProcessor
+            
+            # Initialize processor (with caching enabled by default)
+            local_processor = LocalAdjustmentProcessor()
+            
+            # Apply all adjustment layers
+            rgb = local_processor.apply_adjustment_layers(rgb, recipe.adjustment_layers)
+        
+        # 7. NOISE REDUCTION
+        if recipe.noise_reduction:
+            logger.debug("  - Applying noise reduction...")
+            from photosight.processing.noise import NoiseReducer
+            
+            # Initialize noise reducer
+            noise_reducer = NoiseReducer()
+            
+            # Apply noise reduction with ISO and camera info if available
+            iso = recipe.exif_data.iso if recipe.exif_data else None
+            camera_model = recipe.exif_data.camera_model if recipe.exif_data else None
+            
+            rgb = noise_reducer.reduce_noise(
+                rgb, 
+                recipe.noise_reduction,
+                iso=iso,
+                camera_model=camera_model
+            )
         
         # Final clipping to ensure valid range
         rgb = np.clip(rgb, 0, 1)
