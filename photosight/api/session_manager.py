@@ -18,6 +18,7 @@ from PIL import Image
 
 from ..preview import PhotoSightPreviewSystem, ProxyLevel, PreviewConfig
 from ..processing.raw_processor import ProcessingRecipe
+from ..processing.history import HistoryStack
 from .models import SessionInfo, SessionState, PreviewUpdate, ProcessingProgress
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,9 @@ class EditingSession:
         self.metadata = {}
         self.subscribers = set()  # WebSocket session IDs
         self._lock = threading.RLock()
+        
+        # Initialize history stack
+        self.history = HistoryStack(max_actions=100, max_snapshots=10)
     
     def to_session_info(self) -> SessionInfo:
         """Convert to SessionInfo model."""
@@ -111,8 +115,13 @@ class SessionManager:
                 session.recipe_id = f"recipe_{uuid.uuid4().hex[:12]}"
             else:
                 # Create default recipe
-                session.recipe = ProcessingRecipe(source_path=str(image_path))
+                from ..processing.raw_processor import RawProcessor
+                processor = RawProcessor()
+                session.recipe = processor.create_default_recipe(image_path)
                 session.recipe_id = f"recipe_{uuid.uuid4().hex[:12]}"
+            
+            # Initialize history with the initial recipe
+            session.history.initialize_session(session_id, session.recipe)
             
             # Store session
             self.sessions[session_id] = session
@@ -144,10 +153,28 @@ class SessionManager:
             if not session:
                 return False
             
+            # Store recipe before changes for history
+            recipe_before = ProcessingRecipe.from_dict(session.recipe.to_dict())
+            
             # Update recipe
             for key, value in recipe_update.items():
                 if hasattr(session.recipe, key):
                     setattr(session.recipe, key, value)
+            
+            # Create description for the change
+            field_names = list(recipe_update.keys())
+            description = f"Updated {', '.join(field_names[:3])}"
+            if len(field_names) > 3:
+                description += f" and {len(field_names) - 3} more fields"
+            
+            # Add to history
+            action_id = session.history.add_action(
+                action_type="recipe_change",
+                description=description,
+                recipe_before=recipe_before,
+                recipe_after=session.recipe,
+                metadata={'updated_fields': field_names}
+            )
             
             session.updated_at = datetime.utcnow()
             
@@ -161,9 +188,182 @@ class SessionManager:
             # Notify subscribers
             self._broadcast_update(session_id, 'recipe_updated', {
                 'recipe_id': session.recipe_id,
-                'updated_fields': list(recipe_update.keys())
+                'updated_fields': field_names,
+                'action_id': action_id,
+                'can_undo': session.history.can_undo(),
+                'can_redo': session.history.can_redo()
             })
             
+            return True
+    
+    def undo(self, session_id: str) -> bool:
+        """
+        Undo the last action in a session.
+        
+        Args:
+            session_id: Session ID
+            
+        Returns:
+            True if successful
+        """
+        with self._lock:
+            session = self.sessions.get(session_id)
+            if not session:
+                return False
+            
+            # Attempt undo
+            previous_recipe = session.history.undo()
+            if not previous_recipe:
+                return False
+            
+            # Update session recipe
+            session.recipe = previous_recipe
+            session.updated_at = datetime.utcnow()
+            
+            # Update preview
+            if session.preview_system_session:
+                self.preview_system.update_recipe(
+                    session.preview_system_session,
+                    session.recipe
+                )
+            
+            # Notify subscribers
+            self._broadcast_update(session_id, 'undo_completed', {
+                'recipe_id': session.recipe_id,
+                'can_undo': session.history.can_undo(),
+                'can_redo': session.history.can_redo()
+            })
+            
+            logger.debug(f"Undo completed for session {session_id}")
+            return True
+    
+    def redo(self, session_id: str) -> bool:
+        """
+        Redo the next action in a session.
+        
+        Args:
+            session_id: Session ID
+            
+        Returns:
+            True if successful
+        """
+        with self._lock:
+            session = self.sessions.get(session_id)
+            if not session:
+                return False
+            
+            # Attempt redo
+            next_recipe = session.history.redo()
+            if not next_recipe:
+                return False
+            
+            # Update session recipe
+            session.recipe = next_recipe
+            session.updated_at = datetime.utcnow()
+            
+            # Update preview
+            if session.preview_system_session:
+                self.preview_system.update_recipe(
+                    session.preview_system_session,
+                    session.recipe
+                )
+            
+            # Notify subscribers
+            self._broadcast_update(session_id, 'redo_completed', {
+                'recipe_id': session.recipe_id,
+                'can_undo': session.history.can_undo(),
+                'can_redo': session.history.can_redo()
+            })
+            
+            logger.debug(f"Redo completed for session {session_id}")
+            return True
+    
+    def get_history_summary(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get history summary for a session.
+        
+        Args:
+            session_id: Session ID
+            
+        Returns:
+            History summary or None if session not found
+        """
+        with self._lock:
+            session = self.sessions.get(session_id)
+            if not session:
+                return None
+            
+            return session.history.get_history_summary()
+    
+    def create_snapshot(self, session_id: str, description: str) -> Optional[str]:
+        """
+        Create a snapshot of the current session state.
+        
+        Args:
+            session_id: Session ID
+            description: Snapshot description
+            
+        Returns:
+            Snapshot ID or None if failed
+        """
+        with self._lock:
+            session = self.sessions.get(session_id)
+            if not session:
+                return None
+            
+            snapshot_id = session.history.create_snapshot(
+                description,
+                session.recipe.to_dict()
+            )
+            
+            # Notify subscribers
+            self._broadcast_update(session_id, 'snapshot_created', {
+                'snapshot_id': snapshot_id,
+                'description': description
+            })
+            
+            logger.info(f"Created snapshot '{description}' for session {session_id}")
+            return snapshot_id
+    
+    def restore_snapshot(self, session_id: str, snapshot_id: str) -> bool:
+        """
+        Restore a session from a snapshot.
+        
+        Args:
+            session_id: Session ID
+            snapshot_id: Snapshot ID to restore
+            
+        Returns:
+            True if successful
+        """
+        with self._lock:
+            session = self.sessions.get(session_id)
+            if not session:
+                return False
+            
+            # Restore from snapshot
+            restored_recipe = session.history.restore_snapshot(snapshot_id)
+            if not restored_recipe:
+                return False
+            
+            # Update session recipe
+            session.recipe = restored_recipe
+            session.updated_at = datetime.utcnow()
+            
+            # Update preview
+            if session.preview_system_session:
+                self.preview_system.update_recipe(
+                    session.preview_system_session,
+                    session.recipe
+                )
+            
+            # Notify subscribers
+            self._broadcast_update(session_id, 'snapshot_restored', {
+                'snapshot_id': snapshot_id,
+                'recipe_id': session.recipe_id
+            })
+            
+            logger.info(f"Restored snapshot {snapshot_id} for session {session_id}")
             return True
     
     def get_preview(self, session_id: str, level: Optional[str] = None) -> Optional[str]:

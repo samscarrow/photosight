@@ -26,6 +26,10 @@ from photosight.processing.color.white_balance import WhiteBalanceCorrector, Whi
 from photosight.processing.color.color_grading import ColorGrader, ColorGradingSettings, ColorGradingPreset
 from photosight.processing.yolo_integration import analyze_preview_yolo, YOLOAnalysis
 from photosight.processing.local_adjustments import AdjustmentLayer, MaskData
+from photosight.processing.sharpening import (
+    SharpeningSettings, SharpeningPipeline, create_default_sharpening_settings,
+    InputSharpeningSettings, CreativeSharpeningSettings, OutputSharpeningSettings
+)
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +208,9 @@ class ProcessingRecipe:
     # Noise reduction
     noise_reduction: Optional['NoiseReductionSettings'] = None
     
+    # Sharpening settings
+    sharpening: Optional[SharpeningSettings] = None
+    
     def to_json(self) -> str:
         """Serialize recipe to JSON"""
         data = asdict(self)
@@ -223,6 +230,10 @@ class ProcessingRecipe:
             if 'edge_preservation_method' in nr_dict:
                 nr_dict['edge_preservation_method'] = nr_dict['edge_preservation_method'].value
             data['noise_reduction'] = nr_dict
+        
+        # Convert sharpening settings to dict
+        if 'sharpening' in data and data['sharpening']:
+            data['sharpening'] = asdict(self.sharpening)
         
         return json.dumps(data, indent=2)
     
@@ -246,6 +257,18 @@ class ProcessingRecipe:
             if 'edge_preservation_method' in nr_data and isinstance(nr_data['edge_preservation_method'], str):
                 nr_data['edge_preservation_method'] = EdgePreservationMethod(nr_data['edge_preservation_method'])
             data['noise_reduction'] = NoiseReductionSettings(**nr_data)
+        
+        # Convert sharpening dict back to object
+        if 'sharpening' in data and data['sharpening']:
+            sharpening_data = data['sharpening']
+            # Reconstruct nested dataclasses
+            if 'input_sharpening' in sharpening_data:
+                sharpening_data['input_sharpening'] = InputSharpeningSettings(**sharpening_data['input_sharpening'])
+            if 'creative_sharpening' in sharpening_data:
+                sharpening_data['creative_sharpening'] = CreativeSharpeningSettings(**sharpening_data['creative_sharpening'])
+            if 'output_sharpening' in sharpening_data:
+                sharpening_data['output_sharpening'] = OutputSharpeningSettings(**sharpening_data['output_sharpening'])
+            data['sharpening'] = SharpeningSettings(**sharpening_data)
         
         return cls(**data)
     
@@ -444,11 +467,22 @@ class RawPostProcessor:
         logger.info(f"Extracting EXIF data from {raw_path.name}...")
         exif_data = self._extract_exif_data(raw_path)
         
+        # Determine sharpening style based on image type
+        sharpening_style = "standard"
+        if exif_data:
+            # Try to determine subject type from EXIF
+            focal_length = exif_data.get('FOCAL_LENGTH', 0)
+            if focal_length and focal_length > 85:  # Likely portrait lens
+                sharpening_style = "portrait"
+            elif focal_length and focal_length < 35:  # Likely landscape lens
+                sharpening_style = "landscape"
+        
         recipe = ProcessingRecipe(
             source_path=str(raw_path),
             file_hash=file_hash,
             created_at=datetime.now().isoformat(),
-            exif_data=exif_data
+            exif_data=exif_data,
+            sharpening=create_default_sharpening_settings(sharpening_style)
         )
         
         # Auto-analyze if enabled
@@ -734,6 +768,12 @@ class RawPostProcessor:
         # Apply comprehensive processing pipeline
         rgb = self._apply_processing_pipeline(rgb, recipe)
         
+        # Apply output sharpening before final operations
+        if recipe.sharpening and recipe.sharpening.output_sharpening.enabled:
+            output_size = rgb.shape[:2]  # (height, width)
+            sharpening_pipeline = SharpeningPipeline(recipe.sharpening)
+            rgb = sharpening_pipeline.apply_output_sharpening(rgb, output_size)
+        
         # Apply rotation if needed
         if abs(recipe.rotation_angle) > 0.1:
             rgb = self._rotate_image(rgb, recipe.rotation_angle)
@@ -802,6 +842,12 @@ class RawPostProcessor:
                 recipe.crop_x:recipe.crop_x + recipe.crop_width
             ]
         
+        # Apply output sharpening for full resolution export
+        if recipe.sharpening and recipe.sharpening.output_sharpening.enabled:
+            output_size = rgb.shape[:2]  # (height, width)
+            sharpening_pipeline = SharpeningPipeline(recipe.sharpening)
+            rgb = sharpening_pipeline.apply_output_sharpening(rgb, output_size)
+        
         # Convert to appropriate format and save
         if output_format.lower() in ['jpeg', 'jpg']:
             # Convert to 8-bit BGR for OpenCV
@@ -846,7 +892,13 @@ class RawPostProcessor:
         """
         logger.debug("Applying comprehensive processing pipeline...")
         
-        # 1. WHITE BALANCE CORRECTION
+        # 1. INPUT SHARPENING (Early in pipeline to restore lost detail)
+        if recipe.sharpening and recipe.sharpening.input_sharpening.enabled:
+            logger.debug("  - Applying input sharpening (deconvolution)...")
+            sharpening_pipeline = SharpeningPipeline(recipe.sharpening)
+            rgb = sharpening_pipeline.apply_input_sharpening(rgb)
+        
+        # 2. WHITE BALANCE CORRECTION
         if recipe.wb_multipliers:
             logger.debug("  - Applying white balance correction...")
             
@@ -1033,7 +1085,13 @@ class RawPostProcessor:
             # Apply all adjustment layers
             rgb = local_processor.apply_adjustment_layers(rgb, recipe.adjustment_layers)
         
-        # 7. NOISE REDUCTION
+        # 7. CREATIVE SHARPENING (After local adjustments)
+        if recipe.sharpening and recipe.sharpening.creative_sharpening.enabled:
+            logger.debug("  - Applying creative sharpening (unsharp mask + clarity)...")
+            sharpening_pipeline = SharpeningPipeline(recipe.sharpening)
+            rgb = sharpening_pipeline.apply_creative_sharpening(rgb)
+        
+        # 8. NOISE REDUCTION
         if recipe.noise_reduction:
             logger.debug("  - Applying noise reduction...")
             from photosight.processing.noise import NoiseReducer

@@ -10,7 +10,7 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from functools import wraps, partial
-from typing import Any, Callable, List, Dict, Optional, Union, Awaitable
+from typing import Any, Callable, List, Dict, Optional, Union, Awaitable, Tuple
 from pathlib import Path
 import threading
 from queue import Queue

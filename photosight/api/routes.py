@@ -16,6 +16,9 @@ from .models import (
     BatchProcessingRequest, RecipeValidator
 )
 from .auth import UserSession
+from .album_routes import register_album_routes
+from .photo_routes import register_photo_routes
+from .web_routes import register_web_routes
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +197,220 @@ def register_routes(app):
                 message="Failed to close session",
                 error_code="SESSION_CLOSE_FAILED"
             ).to_dict()), 500
+    
+    # History management endpoints
+    @api.route('/sessions/<session_id>/undo', methods=['POST'])
+    def undo_action(session_id):
+        """Undo the last action in a session."""
+        # Check permission
+        if not app.auth.check_permission(request.user_session, 'sessions.modify'):
+            return jsonify(ErrorResponse(
+                message="Permission denied",
+                error_code="PERMISSION_DENIED"
+            ).to_dict()), 403
+        
+        # Get session
+        session = app.session_manager.get_session(session_id)
+        if not session:
+            return jsonify(ErrorResponse(
+                message="Session not found",
+                error_code="SESSION_NOT_FOUND"
+            ).to_dict()), 404
+        
+        # Check ownership
+        if session.user_id != request.user_session.user_id:
+            return jsonify(ErrorResponse(
+                message="Access denied",
+                error_code="ACCESS_DENIED"
+            ).to_dict()), 403
+        
+        # Perform undo
+        if app.session_manager.undo(session_id):
+            # Get updated session info
+            updated_session = app.session_manager.get_session(session_id)
+            history_summary = app.session_manager.get_history_summary(session_id)
+            
+            return jsonify(APIResponse(
+                status=APIStatus.SUCCESS,
+                data={
+                    'session_id': session_id,
+                    'can_undo': history_summary.get('can_undo', False),
+                    'can_redo': history_summary.get('can_redo', False),
+                    'total_actions': history_summary.get('total_actions', 0)
+                }
+            ).to_dict())
+        else:
+            return jsonify(ErrorResponse(
+                message="Nothing to undo",
+                error_code="NOTHING_TO_UNDO"
+            ).to_dict()), 400
+    
+    @api.route('/sessions/<session_id>/redo', methods=['POST'])
+    def redo_action(session_id):
+        """Redo the next action in a session."""
+        # Check permission
+        if not app.auth.check_permission(request.user_session, 'sessions.modify'):
+            return jsonify(ErrorResponse(
+                message="Permission denied",
+                error_code="PERMISSION_DENIED"
+            ).to_dict()), 403
+        
+        # Get session
+        session = app.session_manager.get_session(session_id)
+        if not session:
+            return jsonify(ErrorResponse(
+                message="Session not found",
+                error_code="SESSION_NOT_FOUND"
+            ).to_dict()), 404
+        
+        # Check ownership
+        if session.user_id != request.user_session.user_id:
+            return jsonify(ErrorResponse(
+                message="Access denied",
+                error_code="ACCESS_DENIED"
+            ).to_dict()), 403
+        
+        # Perform redo
+        if app.session_manager.redo(session_id):
+            # Get updated session info
+            updated_session = app.session_manager.get_session(session_id)
+            history_summary = app.session_manager.get_history_summary(session_id)
+            
+            return jsonify(APIResponse(
+                status=APIStatus.SUCCESS,
+                data={
+                    'session_id': session_id,
+                    'can_undo': history_summary.get('can_undo', False),
+                    'can_redo': history_summary.get('can_redo', False),
+                    'total_actions': history_summary.get('total_actions', 0)
+                }
+            ).to_dict())
+        else:
+            return jsonify(ErrorResponse(
+                message="Nothing to redo",
+                error_code="NOTHING_TO_REDO"
+            ).to_dict()), 400
+    
+    @api.route('/sessions/<session_id>/history', methods=['GET'])
+    def get_session_history(session_id):
+        """Get session history summary."""
+        # Check permission
+        if not app.auth.check_permission(request.user_session, 'sessions.read'):
+            return jsonify(ErrorResponse(
+                message="Permission denied",
+                error_code="PERMISSION_DENIED"
+            ).to_dict()), 403
+        
+        # Get session
+        session = app.session_manager.get_session(session_id)
+        if not session:
+            return jsonify(ErrorResponse(
+                message="Session not found",
+                error_code="SESSION_NOT_FOUND"
+            ).to_dict()), 404
+        
+        # Check ownership
+        if session.user_id != request.user_session.user_id:
+            return jsonify(ErrorResponse(
+                message="Access denied",
+                error_code="ACCESS_DENIED"
+            ).to_dict()), 403
+        
+        # Get history summary
+        history_summary = app.session_manager.get_history_summary(session_id)
+        
+        return jsonify(APIResponse(
+            status=APIStatus.SUCCESS,
+            data=history_summary
+        ).to_dict())
+    
+    @api.route('/sessions/<session_id>/snapshots', methods=['POST'])
+    def create_session_snapshot(session_id):
+        """Create a snapshot of the current session state."""
+        # Check permission
+        if not app.auth.check_permission(request.user_session, 'sessions.modify'):
+            return jsonify(ErrorResponse(
+                message="Permission denied",
+                error_code="PERMISSION_DENIED"
+            ).to_dict()), 403
+        
+        # Get session
+        session = app.session_manager.get_session(session_id)
+        if not session:
+            return jsonify(ErrorResponse(
+                message="Session not found",
+                error_code="SESSION_NOT_FOUND"
+            ).to_dict()), 404
+        
+        # Check ownership
+        if session.user_id != request.user_session.user_id:
+            return jsonify(ErrorResponse(
+                message="Access denied",
+                error_code="ACCESS_DENIED"
+            ).to_dict()), 403
+        
+        # Get description from request
+        data = request.get_json() or {}
+        description = data.get('description', f"Snapshot at {datetime.now().strftime('%H:%M:%S')}")
+        
+        # Create snapshot
+        snapshot_id = app.session_manager.create_snapshot(session_id, description)
+        
+        if snapshot_id:
+            return jsonify(APIResponse(
+                status=APIStatus.SUCCESS,
+                data={
+                    'snapshot_id': snapshot_id,
+                    'description': description,
+                    'session_id': session_id
+                }
+            ).to_dict())
+        else:
+            return jsonify(ErrorResponse(
+                message="Failed to create snapshot",
+                error_code="SNAPSHOT_FAILED"
+            ).to_dict()), 500
+    
+    @api.route('/sessions/<session_id>/snapshots/<snapshot_id>/restore', methods=['POST'])
+    def restore_session_snapshot(session_id, snapshot_id):
+        """Restore a session from a snapshot."""
+        # Check permission
+        if not app.auth.check_permission(request.user_session, 'sessions.modify'):
+            return jsonify(ErrorResponse(
+                message="Permission denied",
+                error_code="PERMISSION_DENIED"
+            ).to_dict()), 403
+        
+        # Get session
+        session = app.session_manager.get_session(session_id)
+        if not session:
+            return jsonify(ErrorResponse(
+                message="Session not found",
+                error_code="SESSION_NOT_FOUND"
+            ).to_dict()), 404
+        
+        # Check ownership
+        if session.user_id != request.user_session.user_id:
+            return jsonify(ErrorResponse(
+                message="Access denied",
+                error_code="ACCESS_DENIED"
+            ).to_dict()), 403
+        
+        # Restore snapshot
+        if app.session_manager.restore_snapshot(session_id, snapshot_id):
+            return jsonify(APIResponse(
+                status=APIStatus.SUCCESS,
+                data={
+                    'snapshot_id': snapshot_id,
+                    'session_id': session_id,
+                    'message': 'Snapshot restored successfully'
+                }
+            ).to_dict())
+        else:
+            return jsonify(ErrorResponse(
+                message="Failed to restore snapshot",
+                error_code="RESTORE_FAILED"
+            ).to_dict()), 400
     
     # Image processing endpoints
     @api.route('/process/preview', methods=['POST'])
@@ -468,5 +685,12 @@ def register_routes(app):
     
     # Register blueprint
     app.register_blueprint(api)
+    
+    # Register album and photo routes
+    register_album_routes(app)
+    register_photo_routes(app)
+    
+    # Register web viewer routes
+    register_web_routes(app)
     
     logger.info("API routes registered")

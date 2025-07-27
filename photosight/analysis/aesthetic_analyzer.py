@@ -32,12 +32,12 @@ class AestheticAnalyzer:
         self.config = config
         self.aesthetic_config = config.get('aesthetic_analysis', {})
     
-    def analyze_aesthetics(self, img_array: np.ndarray) -> Dict:
+    def analyze_aesthetics(self, context) -> Dict:
         """
         Perform comprehensive aesthetic analysis.
         
         Args:
-            img_array: Image as numpy array (RGB)
+            context: AnalysisContext with standardized image data
             
         Returns:
             Dictionary containing aesthetic analysis results
@@ -46,19 +46,19 @@ class AestheticAnalyzer:
             results = {}
             
             # Color harmony analysis
-            color_analysis = self._analyze_color_harmony(img_array)
+            color_analysis = self._analyze_color_harmony(context)
             results.update(color_analysis)
             
             # Contrast and visual impact
-            contrast_analysis = self._analyze_visual_impact(img_array)
+            contrast_analysis = self._analyze_visual_impact(context)
             results.update(contrast_analysis)
             
             # Saturation and vibrancy
-            saturation_analysis = self._analyze_saturation(img_array)
+            saturation_analysis = self._analyze_saturation(context)
             results.update(saturation_analysis)
             
             # Mood and atmosphere
-            mood_analysis = self._analyze_mood(img_array)
+            mood_analysis = self._analyze_mood(context)
             results.update(mood_analysis)
             
             # Overall aesthetic appeal
@@ -76,46 +76,35 @@ class AestheticAnalyzer:
                 'error': str(e)
             }
     
-    def _analyze_color_harmony(self, img_array: np.ndarray) -> Dict:
+    def _analyze_color_harmony(self, context) -> Dict:
         """
         Analyze color harmony and palette quality.
         
         Args:
-            img_array: RGB image array
+            context: AnalysisContext with standardized image data
             
         Returns:
             Dictionary with color harmony analysis
         """
         try:
-            # Ensure proper data type for OpenCV operations
-            img_array = self._ensure_uint8_format(img_array)
+            # Get properly formatted data for K-means clustering
+            pixels_for_kmeans, total_pixels = context.get_for_kmeans(n_colors=5)
             
-            # Convert to different color spaces with additional error handling
-            try:
-                hsv = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
-                lab = cv2.cvtColor(img_array, cv2.COLOR_RGB2LAB)
-            except cv2.error as e:
-                if "VDepth::contains(depth)" in str(e):
-                    # OpenCV depth issue - create a fresh contiguous array
-                    img_array = np.array(img_array, dtype=np.uint8, copy=True)
-                    hsv = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
-                    lab = cv2.cvtColor(img_array, cv2.COLOR_RGB2LAB)
-                else:
-                    raise
+            # Get color spaces from context (cached conversions)
+            hsv = context.hsv_image
+            lab = context.lab_image
             
-            # Extract dominant colors using K-means clustering
-            pixels = img_array.reshape(-1, 3)
-            
-            # Sample pixels for efficiency
-            sample_size = min(10000, len(pixels))
-            sampled_pixels = pixels[np.random.choice(len(pixels), sample_size, replace=False)]
-            
-            # K-means clustering to find dominant colors
+            # Extract dominant colors using OpenCV K-means clustering
             n_colors = 5
-            kmeans = KMeans(n_clusters=n_colors, random_state=42, n_init=10)
-            kmeans.fit(sampled_pixels)
+            criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 1.0)
             
-            dominant_colors = kmeans.cluster_centers_.astype(int)
+            # Use context's properly formatted data for K-means
+            _, labels, centers = cv2.kmeans(
+                pixels_for_kmeans, n_colors, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS
+            )
+            
+            # Convert back to uint8 range for consistency
+            dominant_colors = centers.astype(np.uint8)
             
             # Convert dominant colors to HSV for harmony analysis
             dominant_hsv = []
@@ -128,7 +117,7 @@ class AestheticAnalyzer:
             harmony_score = self._calculate_color_harmony_score(dominant_hsv)
             
             # Analyze color temperature
-            temperature_analysis = self._analyze_color_temperature(img_array)
+            temperature_analysis = self._analyze_color_temperature(context.uint8_image)
             
             # Color distribution analysis
             distribution_analysis = self._analyze_color_distribution(hsv)
@@ -333,7 +322,7 @@ class AestheticAnalyzer:
                 'value_diversity': 0.5
             }
     
-    def _analyze_visual_impact(self, img_array: np.ndarray) -> Dict:
+    def _analyze_visual_impact(self, context) -> Dict:
         """
         Analyze visual impact and contrast.
         
@@ -344,8 +333,8 @@ class AestheticAnalyzer:
             Dictionary with visual impact analysis
         """
         try:
-            # Convert to grayscale for contrast analysis
-            gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+            # Get grayscale from context for contrast analysis
+            gray = context.grayscale_uint8
             
             # Calculate various contrast metrics
             
@@ -369,7 +358,7 @@ class AestheticAnalyzer:
             edge_density = np.sum(edges) / (edges.size * 255)
             
             # Color contrast
-            color_contrast = self._calculate_color_contrast(img_array)
+            color_contrast = self._calculate_color_contrast(context.uint8_image)
             
             # Overall contrast score
             contrast_score = (rms_score + michelson_contrast + edge_density + color_contrast) / 4
@@ -434,22 +423,19 @@ class AestheticAnalyzer:
             logger.warning(f"Color contrast calculation error: {e}")
             return 0.5
     
-    def _analyze_saturation(self, img_array: np.ndarray) -> Dict:
+    def _analyze_saturation(self, context) -> Dict:
         """
         Analyze saturation and vibrancy.
         
         Args:
-            img_array: RGB image array
+            context: AnalysisContext with standardized image data
             
         Returns:
             Dictionary with saturation analysis
         """
         try:
-            # Ensure proper data type for OpenCV operations
-            img_array = self._ensure_uint8_format(img_array)
-            
-            # Convert to HSV
-            hsv = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
+            # Get HSV from context (cached conversion)
+            hsv = context.hsv_image
             saturation = hsv[:, :, 1]
             
             # Calculate saturation statistics
@@ -474,7 +460,7 @@ class AestheticAnalyzer:
                 saturation_score *= 0.8  # Penalize oversaturation
             
             # Vibrancy calculation (saturation in already saturated areas)
-            vibrancy = self._calculate_vibrancy(img_array)
+            vibrancy = self._calculate_vibrancy(context.uint8_image)
             
             return {
                 'saturation_score': float(saturation_score),
@@ -528,23 +514,21 @@ class AestheticAnalyzer:
             logger.warning(f"Vibrancy calculation error: {e}")
             return 0.5
     
-    def _analyze_mood(self, img_array: np.ndarray) -> Dict:
+    def _analyze_mood(self, context) -> Dict:
         """
         Analyze mood and atmosphere of the image.
         
         Args:
-            img_array: RGB image array
+            context: AnalysisContext with standardized image data
             
         Returns:
             Dictionary with mood analysis
         """
         try:
-            # Ensure proper data type for OpenCV operations
-            img_array = self._ensure_uint8_format(img_array)
-            
-            # Convert to different color spaces
-            hsv = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
-            gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+            # Get color spaces from context (cached conversions)
+            hsv = context.hsv_image
+            gray = context.grayscale_uint8
+            img_array = context.uint8_image
             
             # Analyze brightness for mood
             mean_brightness = np.mean(gray) / 255.0

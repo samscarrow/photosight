@@ -82,6 +82,22 @@ photo_tasks = Table(
     Column('task_id', Integer, ForeignKey('tasks.id'), primary_key=True)
 )
 
+# Association model for photos and album tags with extra metadata
+class PhotoAlbumTag(Base):
+    """Association between photos and album tags with metadata."""
+    __tablename__ = 'photo_album_tags'
+    
+    photo_id = Column(Integer, ForeignKey('photos.id'), primary_key=True)
+    album_tag_id = Column(Integer, ForeignKey('album_tags.id'), primary_key=True)
+    added_at = Column(DateTime, default=func.now())
+    added_by = Column(String(100), default='system')
+    sort_order = Column(Integer, default=0)
+    association_metadata = Column(JSONB, default={})
+    
+    # Relationships
+    photo = relationship("Photo", back_populates="album_associations")
+    album_tag = relationship("AlbumTag", back_populates="photo_associations")
+
 # Association table for many-to-many relationship between projects and photos
 project_photos = Table(
     'project_photos',
@@ -90,6 +106,26 @@ project_photos = Table(
     Column('photo_id', Integer, ForeignKey('photos.id'), primary_key=True),
     Column('added_at', DateTime, default=func.now()),
     Column('notes', Text)
+)
+
+# Association table for many-to-many relationship between photos and keywords
+photo_keywords = Table(
+    'photo_keywords',
+    Base.metadata,
+    Column('photo_id', Integer, ForeignKey('photos.id'), primary_key=True),
+    Column('keyword_id', Integer, ForeignKey('keywords.id'), primary_key=True),
+    Column('added_at', DateTime, default=func.now()),
+    Column('source', String(50))  # 'manual', 'ai', 'import'
+)
+
+# Association table for many-to-many relationship between photos and collections
+photo_collections = Table(
+    'photo_collections',
+    Base.metadata,
+    Column('photo_id', Integer, ForeignKey('photos.id'), primary_key=True),
+    Column('collection_id', Integer, ForeignKey('collections.id'), primary_key=True),
+    Column('added_at', DateTime, default=func.now()),
+    Column('sort_order', Integer, default=0)
 )
 
 
@@ -311,6 +347,14 @@ class Photo(Base):
     yolo_detection_runs = relationship("YOLODetectionRun", back_populates="photo", cascade="all, delete-orphan")
     yolo_detections = relationship("YOLODetection", back_populates="photo", cascade="all, delete-orphan")
     yolo_stats = relationship("YOLODetectionStats", back_populates="photo", uselist=False, cascade="all, delete-orphan")
+    
+    # Metadata relationships
+    keywords = relationship("Keyword", secondary=photo_keywords, back_populates="photos")
+    collections = relationship("Collection", secondary=photo_collections, back_populates="photos")
+    iptc_metadata = relationship("IPTCMetadata", back_populates="photo", uselist=False, cascade="all, delete-orphan")
+    
+    # Album associations through the association object
+    album_associations = relationship("PhotoAlbumTag", back_populates="photo", cascade="all, delete-orphan")
     
     # Composite indexes for common queries
     __table_args__ = (
@@ -740,4 +784,187 @@ class YOLODetectionStats(Base):
         Index('idx_yolo_stats_people', 'person_count'),
         Index('idx_yolo_stats_diversity', 'object_diversity'),
         Index('idx_yolo_stats_subject', 'primary_subject'),
+    )
+
+
+class Keyword(Base):
+    """Keywords/tags for photos."""
+    __tablename__ = 'keywords'
+    
+    id = Column(Integer, primary_key=True)
+    keyword = Column(String(200), unique=True, nullable=False, index=True)
+    category = Column(String(100), index=True)  # Optional keyword categorization
+    
+    # Usage tracking
+    usage_count = Column(Integer, default=0)
+    last_used = Column(DateTime)
+    
+    # Metadata
+    created_at = Column(DateTime, default=func.now())
+    created_by = Column(String(100))  # 'user', 'ai', 'import'
+    
+    # Relationships
+    photos = relationship("Photo", secondary=photo_keywords, back_populates="keywords")
+    
+    __table_args__ = (
+        Index('idx_keyword_usage', 'usage_count', 'last_used'),
+        Index('idx_keyword_category', 'category', 'keyword'),
+    )
+
+
+class Collection(Base):
+    """Photo collections for organization."""
+    __tablename__ = 'collections'
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(200), nullable=False, index=True)
+    description = Column(Text)
+    parent_collection_id = Column(Integer, ForeignKey('collections.id'), index=True)
+    
+    # Collection type
+    collection_type = Column(String(50), default='manual')  # 'manual', 'smart', 'album'
+    smart_criteria = Column(JSONB)  # For smart collections
+    
+    # Display settings
+    sort_by = Column(String(50), default='date_taken')
+    sort_order = Column(String(10), default='asc')
+    cover_photo_id = Column(Integer, ForeignKey('photos.id'))
+    
+    # Metadata
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    created_by = Column(String(100))
+    
+    # Privacy/sharing
+    is_public = Column(Boolean, default=False)
+    share_token = Column(String(100), unique=True)
+    
+    # Statistics
+    photo_count = Column(Integer, default=0)
+    
+    # Relationships
+    photos = relationship("Photo", secondary=photo_collections, back_populates="collections")
+    parent_collection = relationship("Collection", remote_side=[id])
+    subcollections = relationship("Collection", back_populates="parent_collection")
+    cover_photo = relationship("Photo", foreign_keys=[cover_photo_id])
+    
+    __table_args__ = (
+        Index('idx_collection_type', 'collection_type', 'name'),
+        Index('idx_collection_parent', 'parent_collection_id'),
+        Index('idx_collection_share', 'share_token', 'is_public'),
+    )
+
+
+class IPTCMetadata(Base):
+    """IPTC/XMP metadata for photos."""
+    __tablename__ = 'iptc_metadata'
+    
+    id = Column(Integer, primary_key=True)
+    photo_id = Column(Integer, ForeignKey('photos.id'), nullable=False, unique=True, index=True)
+    
+    # Core IPTC fields
+    title = Column(String(500))
+    caption = Column(Text)  # Also known as description
+    headline = Column(String(500))
+    
+    # Creator information
+    creator = Column(String(200))  # Photographer/artist name
+    creator_job_title = Column(String(200))
+    creator_address = Column(String(500))
+    creator_city = Column(String(100))
+    creator_region = Column(String(100))  # State/Province
+    creator_postal_code = Column(String(50))
+    creator_country = Column(String(100))
+    creator_phone = Column(String(100))
+    creator_email = Column(String(200))
+    creator_website = Column(String(500))
+    
+    # Copyright and rights
+    copyright_notice = Column(String(500))
+    rights_usage_terms = Column(Text)
+    
+    # Content description
+    subject_code = Column(JSONB)  # IPTC subject codes
+    scene_code = Column(JSONB)  # IPTC scene codes
+    genre = Column(JSONB)  # List of genres
+    
+    # Location (more detailed than GPS)
+    sublocation = Column(String(200))  # e.g., "Central Park"
+    city = Column(String(100))
+    region = Column(String(100))  # State/Province
+    country = Column(String(100))
+    country_code = Column(String(10))
+    
+    # Event information
+    event = Column(String(200))
+    
+    # Instructions
+    instructions = Column(Text)  # Special instructions
+    
+    # Dates
+    date_created = Column(DateTime)  # When the photo was taken
+    
+    # Source
+    source = Column(String(200))
+    credit = Column(String(200))
+    
+    # Additional metadata
+    job_id = Column(String(100))
+    
+    # XMP sidecar sync
+    xmp_sidecar_path = Column(Text)
+    xmp_last_synced = Column(DateTime)
+    xmp_sync_status = Column(String(50))  # 'synced', 'modified', 'missing'
+    
+    # Metadata tracking
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    modified_by = Column(String(100))
+    
+    # Full IPTC/XMP data as JSON for fields we don't explicitly track
+    extended_metadata = Column(JSONB, default={})
+    
+    # Relationships
+    photo = relationship("Photo", back_populates="iptc_metadata", uselist=False)
+    
+    __table_args__ = (
+        Index('idx_iptc_creator', 'creator'),
+        Index('idx_iptc_location', 'city', 'region', 'country'),
+        Index('idx_iptc_event', 'event'),
+        Index('idx_iptc_sync', 'xmp_sync_status', 'xmp_last_synced'),
+    )
+
+
+class AlbumTag(Base):
+    """
+    Album tags for organizing photos into dynamic albums.
+    
+    Albums are created automatically when tags are assigned to photos.
+    Photos can belong to multiple albums through tags.
+    """
+    __tablename__ = 'album_tags'
+    
+    id = Column(Integer, primary_key=True)
+    tag_name = Column(String(100), unique=True, nullable=False, index=True)
+    display_name = Column(String(200))
+    description = Column(Text)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    created_by = Column(String(100), default='system')
+    is_public = Column(Boolean, default=False, index=True)
+    
+    # Metadata for album configuration and settings
+    album_metadata = Column(JSONB, default={})
+    
+    # Statistics (can be updated by triggers or batch jobs)
+    photo_count = Column(Integer, default=0)
+    last_photo_added = Column(DateTime)
+    
+    # Relationships through association object
+    photo_associations = relationship("PhotoAlbumTag", back_populates="album_tag", cascade="all, delete-orphan")
+    
+    # Indexes
+    __table_args__ = (
+        Index('idx_album_tags_updated', 'updated_at'),
+        Index('idx_album_tags_public_updated', 'is_public', 'updated_at'),
     )

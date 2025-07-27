@@ -32,44 +32,41 @@ class CompositionAnalyzer:
         self.config = config
         self.composition_config = config.get('composition_analysis', {})
     
-    def analyze_composition(self, img_array: np.ndarray) -> Dict:
+    def analyze_composition(self, context) -> Dict:
         """
         Perform comprehensive composition analysis.
         
         Args:
-            img_array: Image as numpy array (RGB)
+            context: AnalysisContext with standardized image data
             
         Returns:
             Dictionary containing composition analysis results
         """
         try:
-            height, width = img_array.shape[:2]
+            height, width = context.height, context.width
             
             results = {
                 'image_dimensions': {'width': width, 'height': height}
             }
             
-            # Convert to grayscale for analysis
-            gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-            
             # Rule of thirds analysis
-            rule_of_thirds = self._analyze_rule_of_thirds(gray)
+            rule_of_thirds = self._analyze_rule_of_thirds(context)
             results.update(rule_of_thirds)
             
             # Visual balance analysis
-            balance = self._analyze_visual_balance(gray)
+            balance = self._analyze_visual_balance(context)
             results.update(balance)
             
             # Leading lines analysis
-            leading_lines = self._analyze_leading_lines(gray)
+            leading_lines = self._analyze_leading_lines(context)
             results.update(leading_lines)
             
             # Symmetry analysis
-            symmetry = self._analyze_symmetry(gray)
+            symmetry = self._analyze_symmetry(context)
             results.update(symmetry)
             
             # Edge distribution analysis
-            edge_analysis = self._analyze_edge_distribution(gray)
+            edge_analysis = self._analyze_edge_distribution(context)
             results.update(edge_analysis)
             
             # Calculate overall composition score
@@ -84,18 +81,19 @@ class CompositionAnalyzer:
                 'error': str(e)
             }
     
-    def _analyze_rule_of_thirds(self, gray: np.ndarray) -> Dict:
+    def _analyze_rule_of_thirds(self, context) -> Dict:
         """
         Analyze rule of thirds composition.
         
         Args:
-            gray: Grayscale image array
+            context: AnalysisContext with standardized image data
             
         Returns:
             Dictionary with rule of thirds analysis
         """
         try:
-            height, width = gray.shape
+            height, width = context.height, context.width
+            gray = context.grayscale_uint8
             
             # Calculate third lines
             third_h = height // 3
@@ -203,29 +201,31 @@ class CompositionAnalyzer:
             logger.warning(f"Third line alignment error: {e}")
             return 0.5
     
-    def _analyze_visual_balance(self, gray: np.ndarray) -> Dict:
+    def _analyze_visual_balance(self, context) -> Dict:
         """
         Analyze visual balance in the image.
         
         Args:
-            gray: Grayscale image array
+            context: AnalysisContext with standardized image data
             
         Returns:
             Dictionary with visual balance analysis
         """
         try:
-            height, width = gray.shape
+            height, width = context.height, context.width
+            gray = context.grayscale_uint8  # Get uint8 version for consistent calculations
             
             # Calculate center of mass
             y_coords, x_coords = np.ogrid[:height, :width]
             
-            # Weight each pixel by its intensity
-            total_mass = np.sum(gray)
+            # Weight each pixel by its intensity - use int64 to prevent overflow
+            gray_int64 = gray.astype(np.int64)
+            total_mass = np.sum(gray_int64)
             if total_mass == 0:
                 return {'balance_score': 0.5, 'center_of_mass': (width//2, height//2)}
             
-            center_x = np.sum(x_coords * gray) / total_mass
-            center_y = np.sum(y_coords * gray) / total_mass
+            center_x = np.sum(x_coords * gray_int64) / total_mass
+            center_y = np.sum(y_coords * gray_int64) / total_mass
             
             # Calculate how far center of mass is from image center
             image_center_x = width / 2
@@ -240,13 +240,13 @@ class CompositionAnalyzer:
             balance_score = 1.0 - (distance_from_center / max_distance)
             
             # Analyze left-right balance
-            left_half = gray[:, :width//2]
-            right_half = gray[:, width//2:]
+            left_half = gray[:, :width//2].astype(np.int64)
+            right_half = gray[:, width//2:].astype(np.int64)
             
             left_mass = np.sum(left_half)
             right_mass = np.sum(right_half)
             
-            # Convert to float to prevent overflow
+            # Convert to float to prevent overflow in calculations
             left_mass_f = float(left_mass)
             right_mass_f = float(right_mass)
             denominator = left_mass_f + right_mass_f
@@ -257,13 +257,13 @@ class CompositionAnalyzer:
                 lr_balance = 1.0
             
             # Analyze top-bottom balance
-            top_half = gray[:height//2, :]
-            bottom_half = gray[height//2:, :]
+            top_half = gray[:height//2, :].astype(np.int64)
+            bottom_half = gray[height//2:, :].astype(np.int64)
             
             top_mass = np.sum(top_half)
             bottom_mass = np.sum(bottom_half)
             
-            # Convert to float to prevent overflow
+            # Convert to float to prevent overflow in calculations
             top_mass_f = float(top_mass)
             bottom_mass_f = float(bottom_mass)
             denominator = top_mass_f + bottom_mass_f
@@ -293,7 +293,7 @@ class CompositionAnalyzer:
                 'tb_balance': 0.5
             }
     
-    def _analyze_leading_lines(self, gray: np.ndarray) -> Dict:
+    def _analyze_leading_lines(self, context) -> Dict:
         """
         Analyze leading lines in the composition.
         
@@ -318,7 +318,8 @@ class CompositionAnalyzer:
                     'convergence_score': 0.0
                 }
             
-            height, width = gray.shape
+            height, width = context.height, context.width
+            gray = context.grayscale_uint8
             image_center = (width//2, height//2)
             
             # Analyze line convergence toward center or edges
@@ -366,7 +367,7 @@ class CompositionAnalyzer:
                 'convergence_score': 0.0
             }
     
-    def _analyze_symmetry(self, gray: np.ndarray) -> Dict:
+    def _analyze_symmetry(self, context) -> Dict:
         """
         Analyze symmetry in the composition.
         
@@ -377,7 +378,8 @@ class CompositionAnalyzer:
             Dictionary with symmetry analysis
         """
         try:
-            height, width = gray.shape
+            height, width = context.height, context.width
+            gray = context.grayscale_uint8
             
             # Vertical symmetry (left-right)
             left_half = gray[:, :width//2]
@@ -424,7 +426,7 @@ class CompositionAnalyzer:
                 'horizontal_symmetry': 0.5
             }
     
-    def _analyze_edge_distribution(self, gray: np.ndarray) -> Dict:
+    def _analyze_edge_distribution(self, context) -> Dict:
         """
         Analyze distribution of edges and details.
         
@@ -435,10 +437,12 @@ class CompositionAnalyzer:
             Dictionary with edge distribution analysis
         """
         try:
-            # Edge detection
-            edges = cv2.Canny(gray, 50, 150)
+            # Edge detection using context's optimized method
+            edges = context.get_edge_map(50, 150)
+            # Convert back to uint8 for compatibility with existing logic
+            edges = (edges * 255).astype(np.uint8)
             
-            height, width = edges.shape
+            height, width = context.height, context.width
             
             # Divide image into grid and analyze edge density
             grid_size = 3

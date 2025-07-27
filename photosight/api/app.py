@@ -47,7 +47,9 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
     logger.info("Validating security configuration...")
     validate_production_environment()
     
-    app = Flask(__name__)
+    # Set template and static folders
+    template_folder = Path(__file__).parent / 'templates'
+    app = Flask(__name__, template_folder=str(template_folder))
     
     # Get security configuration
     security_validator = SecurityValidator()
@@ -174,8 +176,12 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
     @app.before_request
     def before_request():
         """Handle authentication and rate limiting."""
-        # Skip auth for health check and docs
-        if request.path in ['/health', '/docs', '/']:
+        # Skip auth for health check, docs, web viewer, and photo endpoints
+        public_paths = ['/health', '/docs', '/']
+        if (request.path in public_paths or 
+            request.path.startswith('/viewer') or 
+            request.path.startswith('/api/v1/photos/') or
+            request.path.startswith('/api/v1/albums/')):
             return
         
         # Skip auth for OPTIONS requests (CORS preflight)
