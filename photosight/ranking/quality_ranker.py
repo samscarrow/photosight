@@ -129,8 +129,7 @@ class QualityRanker:
             
             scores = {}
             
-            # Get emotional impact from Vision LLM first (if available)
-            emotional_impact_score = 0.5  # Default fallback
+            # Get emotional impact from Vision LLM first (if available) and store in context
             try:
                 if self.vision_llm_analyzer and self.vision_llm_analyzer.enabled:
                     vision_result = self.vision_llm_analyzer.analyze_emotional_impact(photo_path)
@@ -138,9 +137,12 @@ class QualityRanker:
                     if vision_analysis:
                         emotional_impact_score = vision_analysis.get('emotion_score', 0.5)
                         emotional_impact_score = max(0.0, min(1.0, float(emotional_impact_score)))
+                        # Store in context for use by other analyzers
+                        context.emotional_impact_score = emotional_impact_score
                         logger.debug(f"Vision LLM emotional impact: {emotional_impact_score:.3f}")
             except Exception as e:
                 logger.warning(f"Vision LLM emotional analysis failed for {photo_path}: {e}")
+                # Leave context.emotional_impact_score as None to trigger fallback
             
             # Technical quality analysis
             try:
@@ -158,11 +160,10 @@ class QualityRanker:
                 logger.warning(f"Composition analysis failed for {photo_path}: {e}")
                 scores['composition'] = 0.5
             
-            # Aesthetic analysis (context provides appropriate data types)
-            # Pass emotional impact score to avoid redundant vision LLM calls
+            # Aesthetic analysis (context now includes emotional impact score if available)
             try:
                 logger.debug(f"Aesthetic analysis - image size: {context.width}x{context.height}, channels: {context.channels}")
-                aesthetic_score = self._analyze_aesthetics(context, emotional_impact_score)
+                aesthetic_score = self._analyze_aesthetics(context)
                 scores['aesthetic'] = aesthetic_score
             except Exception as e:
                 logger.warning(f"Aesthetic analysis failed for {photo_path}: {e}")
@@ -301,31 +302,19 @@ class QualityRanker:
             logger.warning(f"Composition analysis error: {e}")
             return 0.5
     
-    def _analyze_aesthetics(self, context, emotional_impact_score: float) -> float:
-        """Analyze aesthetic quality using analysis context and pre-computed emotional impact."""
+    def _analyze_aesthetics(self, context) -> float:
+        """Analyze aesthetic quality using analysis context (includes emotional impact if available)."""
         try:
             # Let the aesthetic analyzer request the specific data format it needs
-            # Pass emotional impact score to avoid redundant vision LLM calls
-            analysis = self.aesthetic_analyzer.analyze_aesthetics(context, emotional_impact_score)
+            # Context now contains emotional_impact_score if Vision LLM was successful
+            analysis = self.aesthetic_analyzer.analyze_aesthetics(context)
             
-            # Extract aesthetic scores
-            color_harmony = analysis.get('color_harmony', 0.5)
-            contrast = analysis.get('contrast_score', 0.5)
-            saturation = analysis.get('saturation_score', 0.5)
+            # Extract aesthetic scores - overall_appeal already includes emotional impact
             overall_appeal = analysis.get('overall_appeal', 0.5)
             
-            # Use pre-computed emotional impact score instead of mood_score
-            # This replaces the traditional mood-based scoring with LLM-powered emotional analysis
-            
-            # Weight aesthetic aspects (updated to use single emotional score)
-            aesthetic_score = (
-                color_harmony * 0.30 +
-                contrast * 0.25 +
-                saturation * 0.20 +
-                emotional_impact_score * 0.25  # Use pre-computed emotional impact
-            )
-            
-            return max(0.0, min(1.0, aesthetic_score))
+            # Return the overall appeal which has already been calculated
+            # with proper weighting of all components including emotional impact
+            return max(0.0, min(1.0, overall_appeal))
             
         except Exception as e:
             logger.warning(f"Aesthetic analysis error: {e}")
@@ -386,8 +375,7 @@ class QualityRanker:
             from ..processing.analysis_context import AnalysisContext
             context = AnalysisContext(image_array, str(photo_path))
             
-            # Get emotional impact from Vision LLM first
-            emotional_impact_score = 0.5
+            # Get emotional impact from Vision LLM first and store in context
             emotional_analysis = {}
             try:
                 if self.vision_llm_analyzer and self.vision_llm_analyzer.enabled:
@@ -396,13 +384,15 @@ class QualityRanker:
                     if emotional_analysis:
                         emotional_impact_score = emotional_analysis.get('emotion_score', 0.5)
                         emotional_impact_score = max(0.0, min(1.0, float(emotional_impact_score)))
+                        # Store in context for use by other analyzers
+                        context.emotional_impact_score = emotional_impact_score
             except Exception as e:
                 logger.warning(f"Vision LLM emotional analysis failed: {e}")
             
             # Get detailed analysis from each component
             technical = self.technical_analyzer.analyze_photo(image, photo_path)
             composition = self.composition_analyzer.analyze_composition(context)
-            aesthetic = self.aesthetic_analyzer.analyze_aesthetics(context, emotional_impact_score)
+            aesthetic = self.aesthetic_analyzer.analyze_aesthetics(context)
             
             # Simplified subject analysis
             subject = {
@@ -414,7 +404,7 @@ class QualityRanker:
             # Calculate component scores
             technical_score = self._analyze_technical_quality(image, photo_path)
             composition_score = self._analyze_composition(context)
-            aesthetic_score = self._analyze_aesthetics(context, emotional_impact_score)
+            aesthetic_score = self._analyze_aesthetics(context)
             subject_score = self._analyze_subjects(context, photo_path)
             
             # Calculate base overall score

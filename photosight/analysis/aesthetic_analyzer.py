@@ -32,13 +32,12 @@ class AestheticAnalyzer:
         self.config = config
         self.aesthetic_config = config.get('aesthetic_analysis', {})
     
-    def analyze_aesthetics(self, context, emotional_impact_score=None) -> Dict:
+    def analyze_aesthetics(self, context) -> Dict:
         """
         Perform comprehensive aesthetic analysis.
         
         Args:
-            context: AnalysisContext with standardized image data
-            emotional_impact_score: Pre-computed emotional impact score (0.0-1.0) from Vision LLM
+            context: AnalysisContext with standardized image data (includes emotional_impact_score if available)
             
         Returns:
             Dictionary containing aesthetic analysis results
@@ -59,8 +58,8 @@ class AestheticAnalyzer:
             results.update(saturation_analysis)
             
             # Mood and atmosphere analysis
-            # Use pre-computed emotional impact score if available, otherwise fall back to traditional analysis
-            mood_analysis = self._analyze_mood(context, emotional_impact_score)
+            # Will use context.emotional_impact_score if available, otherwise fall back to traditional analysis
+            mood_analysis = self._analyze_mood(context)
             results.update(mood_analysis)
             
             # Overall aesthetic appeal
@@ -516,14 +515,13 @@ class AestheticAnalyzer:
             logger.warning(f"Vibrancy calculation error: {e}")
             return 0.5
     
-    def _analyze_mood(self, context, emotional_impact_score=None) -> Dict:
+    def _analyze_mood(self, context) -> Dict:
         """
         Analyze mood and atmosphere of the image.
-        Uses pre-computed emotional impact score when available, falls back to traditional analysis.
+        Uses emotional impact score from context when available, falls back to traditional analysis.
         
         Args:
-            context: AnalysisContext with standardized image data
-            emotional_impact_score: Pre-computed emotional impact score from Vision LLM (0.0-1.0)
+            context: AnalysisContext with standardized image data and optional emotional_impact_score
             
         Returns:
             Dictionary with mood analysis
@@ -581,10 +579,10 @@ class AestheticAnalyzer:
             # Calculate traditional mood score
             traditional_mood_score = np.mean(list(mood_scores.values())) if mood_scores else 0.5
             
-            # Use pre-computed emotional impact score if available, otherwise fall back to traditional
-            if emotional_impact_score is not None:
-                final_emotional_score = emotional_impact_score
-                logger.debug(f"Using pre-computed emotional impact: {final_emotional_score:.3f}")
+            # Use emotional impact score from context if available, otherwise fall back to traditional
+            if context.emotional_impact_score is not None:
+                final_emotional_score = context.emotional_impact_score
+                logger.debug(f"Using vision LLM emotional impact from context: {final_emotional_score:.3f}")
             else:
                 # Fallback to traditional mood analysis
                 final_emotional_score = traditional_mood_score

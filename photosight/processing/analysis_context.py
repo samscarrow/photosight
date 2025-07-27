@@ -45,6 +45,9 @@ class AnalysisContext:
         self._channels = self._shape[2] if len(self._shape) == 3 else 1
         self._photo_path = photo_path
         
+        # Analysis results from external analyzers
+        self._emotional_impact_score = None  # Will be set by Vision LLM if available
+        
         # Cache for derived representations
         self._cache: Dict[str, Any] = {}
         
@@ -74,6 +77,29 @@ class AnalysisContext:
     def photo_path(self) -> Optional[str]:
         """Path to the source image file."""
         return self._photo_path
+    
+    @property
+    def emotional_impact_score(self) -> Optional[float]:
+        """
+        Emotional impact score from Vision LLM analysis.
+        
+        Returns None if not yet analyzed, otherwise a score between 0.0 and 1.0.
+        """
+        return self._emotional_impact_score
+    
+    @emotional_impact_score.setter
+    def emotional_impact_score(self, value: Optional[float]):
+        """
+        Set emotional impact score from Vision LLM analysis.
+        
+        Args:
+            value: Score between 0.0 and 1.0, or None
+        """
+        if value is not None:
+            # Ensure value is in valid range
+            self._emotional_impact_score = max(0.0, min(1.0, float(value)))
+        else:
+            self._emotional_impact_score = None
     
     @property
     def standard_image(self) -> np.ndarray:
