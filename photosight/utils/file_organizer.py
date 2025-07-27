@@ -426,3 +426,217 @@ class PhotoOrganizer:
                 preview["Errors"].append(f"{photo_file.name}: {e}")
         
         return preview
+    
+    def export_ranking_results(self, photo_files: List[Path], output_path: Path,
+                             include_details: bool = True,
+                             progress_callback: Optional[callable] = None) -> bool:
+        """
+        Export ranking results to CSV file including decisive moment information.
+        
+        Args:
+            photo_files: List of photo file paths to rank
+            output_path: Path for output CSV file
+            include_details: Whether to include detailed analysis
+            progress_callback: Optional progress callback function
+            
+        Returns:
+            True if export successful, False otherwise
+        """
+        try:
+            from ..ranking.quality_ranker import QualityRanker
+            ranker = QualityRanker(self.config)
+            
+            # Prepare CSV writer
+            import csv
+            with open(output_path, 'w', newline='') as csvfile:
+                # Define CSV fields including decisive moment information
+                fieldnames = [
+                    'rank', 'filename', 'overall_score', 
+                    'technical', 'composition', 'aesthetic', 'subject',
+                    'is_decisive_moment', 'decisive_moment_score',
+                    'file_path'
+                ]
+                
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                
+                # Rank all photos
+                ranked_photos = []
+                for i, photo_file in enumerate(photo_files):
+                    try:
+                        if include_details:
+                            # Get detailed analysis including decisive moment
+                            analysis = ranker.get_detailed_analysis(photo_file)
+                            
+                            ranked_photos.append({
+                                'path': photo_file,
+                                'overall_score': analysis.get('overall_score', 0.0),
+                                'technical': analysis.get('component_scores', {}).get('technical', 0.0),
+                                'composition': analysis.get('component_scores', {}).get('composition', 0.0),
+                                'aesthetic': analysis.get('component_scores', {}).get('aesthetic', 0.0),
+                                'subject': analysis.get('component_scores', {}).get('subject', 0.0),
+                                'is_decisive_moment': analysis.get('is_decisive_moment', False),
+                                'decisive_moment_score': analysis.get('decisive_moment_score', 0.0)
+                            })
+                        else:
+                            # Quick ranking without details
+                            score = ranker.rank_photo(photo_file)
+                            ranked_photos.append({
+                                'path': photo_file,
+                                'overall_score': score,
+                                'technical': 0.0,
+                                'composition': 0.0,
+                                'aesthetic': 0.0,
+                                'subject': 0.0,
+                                'is_decisive_moment': False,
+                                'decisive_moment_score': 0.0
+                            })
+                        
+                        if progress_callback:
+                            progress_callback(i + 1, len(photo_files))
+                            
+                    except Exception as e:
+                        logger.error(f"Error ranking {photo_file}: {e}")
+                        continue
+                
+                # Sort by overall score (descending)
+                ranked_photos.sort(key=lambda x: x['overall_score'], reverse=True)
+                
+                # Write ranked results to CSV
+                for rank, photo_data in enumerate(ranked_photos, 1):
+                    row = {
+                        'rank': rank,
+                        'filename': photo_data['path'].name,
+                        'overall_score': f"{photo_data['overall_score']:.3f}",
+                        'technical': f"{photo_data['technical']:.3f}",
+                        'composition': f"{photo_data['composition']:.3f}",
+                        'aesthetic': f"{photo_data['aesthetic']:.3f}",
+                        'subject': f"{photo_data['subject']:.3f}",
+                        'is_decisive_moment': 'Yes' if photo_data['is_decisive_moment'] else 'No',
+                        'decisive_moment_score': f"{photo_data['decisive_moment_score']:.3f}",
+                        'file_path': str(photo_data['path'])
+                    }
+                    writer.writerow(row)
+            
+            logger.info(f"Ranking results exported to: {output_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error exporting ranking results: {e}")
+            return False
+    
+    def export_ranking_json(self, photo_files: List[Path], output_path: Path,
+                          include_details: bool = True,
+                          progress_callback: Optional[callable] = None) -> bool:
+        """
+        Export ranking results to JSON file including decisive moment information.
+        
+        Args:
+            photo_files: List of photo file paths to rank
+            output_path: Path for output JSON file
+            include_details: Whether to include detailed analysis
+            progress_callback: Optional progress callback function
+            
+        Returns:
+            True if export successful, False otherwise
+        """
+        try:
+            from ..ranking.quality_ranker import QualityRanker
+            ranker = QualityRanker(self.config)
+            
+            results = {
+                'metadata': {
+                    'generated_at': datetime.now().isoformat(),
+                    'total_photos': len(photo_files),
+                    'include_details': include_details
+                },
+                'rankings': [],
+                'decisive_moments': [],
+                'statistics': {}
+            }
+            
+            # Rank all photos
+            ranked_photos = []
+            decisive_moment_count = 0
+            
+            for i, photo_file in enumerate(photo_files):
+                try:
+                    if include_details:
+                        # Get detailed analysis including decisive moment
+                        analysis = ranker.get_detailed_analysis(photo_file)
+                        
+                        photo_data = {
+                            'filename': photo_file.name,
+                            'file_path': str(photo_file),
+                            'overall_score': analysis.get('overall_score', 0.0),
+                            'component_scores': analysis.get('component_scores', {}),
+                            'is_decisive_moment': analysis.get('is_decisive_moment', False),
+                            'decisive_moment_score': analysis.get('decisive_moment_score', 0.0)
+                        }
+                        
+                        # Add detailed analysis if available
+                        if 'detailed_analysis' in analysis:
+                            if 'decisive_moment' in analysis['detailed_analysis']:
+                                photo_data['decisive_moment_analysis'] = analysis['detailed_analysis']['decisive_moment']
+                        
+                        if photo_data['is_decisive_moment']:
+                            decisive_moment_count += 1
+                            results['decisive_moments'].append({
+                                'filename': photo_file.name,
+                                'file_path': str(photo_file),
+                                'decisive_moment_score': photo_data['decisive_moment_score'],
+                                'overall_score': photo_data['overall_score']
+                            })
+                    else:
+                        # Quick ranking without details
+                        score = ranker.rank_photo(photo_file)
+                        photo_data = {
+                            'filename': photo_file.name,
+                            'file_path': str(photo_file),
+                            'overall_score': score,
+                            'component_scores': {},
+                            'is_decisive_moment': False,
+                            'decisive_moment_score': 0.0
+                        }
+                    
+                    ranked_photos.append(photo_data)
+                    
+                    if progress_callback:
+                        progress_callback(i + 1, len(photo_files))
+                        
+                except Exception as e:
+                    logger.error(f"Error ranking {photo_file}: {e}")
+                    continue
+            
+            # Sort by overall score (descending)
+            ranked_photos.sort(key=lambda x: x['overall_score'], reverse=True)
+            
+            # Add rank numbers
+            for rank, photo_data in enumerate(ranked_photos, 1):
+                photo_data['rank'] = rank
+                results['rankings'].append(photo_data)
+            
+            # Sort decisive moments by score
+            results['decisive_moments'].sort(key=lambda x: x['decisive_moment_score'], reverse=True)
+            
+            # Add statistics
+            if ranked_photos:
+                scores = [p['overall_score'] for p in ranked_photos]
+                results['statistics'] = {
+                    'average_score': sum(scores) / len(scores),
+                    'max_score': max(scores),
+                    'min_score': min(scores),
+                    'decisive_moment_count': decisive_moment_count,
+                    'decisive_moment_percentage': (decisive_moment_count / len(ranked_photos)) * 100
+                }
+            
+            # Write to JSON file
+            with open(output_path, 'w') as f:
+                json.dump(results, f, indent=2)
+            
+            logger.info(f"Ranking results exported to JSON: {output_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error exporting ranking results to JSON: {e}")
+            return False

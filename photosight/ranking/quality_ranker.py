@@ -210,9 +210,14 @@ class QualityRanker:
             # Ensure score is in valid range
             overall_score = max(0.0, min(1.0, overall_score))
             
+            # Log results including decisive moment info
+            decisive_info = ""
+            if scores.get('is_decisive_moment', False):
+                decisive_info = f", DM:{scores.get('decisive_moment_score', 0.0):.2f}✓"
+            
             logger.debug(f"Ranked {photo_path.name}: {overall_score:.3f} "
                         f"(T:{scores['technical']:.2f}, C:{scores['composition']:.2f}, "
-                        f"A:{scores['aesthetic']:.2f}, S:{scores['subject']:.2f})")
+                        f"A:{scores['aesthetic']:.2f}, S:{scores['subject']:.2f}{decisive_info})")
             
             return overall_score
             
@@ -368,23 +373,51 @@ class QualityRanker:
         photo_path = Path(photo_path)
         
         try:
-            image = Image.open(photo_path)
+            # Load image
+            image = self._load_image(photo_path)
             if image.mode != 'RGB':
                 image = image.convert('RGB')
             
+            # Create analysis context
+            image_array = np.array(image, dtype=np.uint8)
+            if len(image_array.shape) == 3 and image_array.shape[2] == 3:
+                image_array = np.ascontiguousarray(image_array, dtype=np.uint8)
+            
+            from ..processing.analysis_context import AnalysisContext
+            context = AnalysisContext(image_array, str(photo_path))
+            
+            # Get emotional impact from Vision LLM first
+            emotional_impact_score = 0.5
+            emotional_analysis = {}
+            try:
+                if self.vision_llm_analyzer and self.vision_llm_analyzer.enabled:
+                    vision_result = self.vision_llm_analyzer.analyze_emotional_impact(photo_path)
+                    emotional_analysis = vision_result.get('parsed', {})
+                    if emotional_analysis:
+                        emotional_impact_score = emotional_analysis.get('emotion_score', 0.5)
+                        emotional_impact_score = max(0.0, min(1.0, float(emotional_impact_score)))
+            except Exception as e:
+                logger.warning(f"Vision LLM emotional analysis failed: {e}")
+            
             # Get detailed analysis from each component
-            technical = self.technical_analyzer.analyze_photo(photo_path)
-            composition = self.composition_analyzer.analyze_composition(np.array(image))
-            aesthetic = self.aesthetic_analyzer.analyze_aesthetics(np.array(image))
-            subject = self.subject_analyzer.analyze_photo(np.array(image))
+            technical = self.technical_analyzer.analyze_photo(image, photo_path)
+            composition = self.composition_analyzer.analyze_composition(context)
+            aesthetic = self.aesthetic_analyzer.analyze_aesthetics(context, emotional_impact_score)
+            
+            # Simplified subject analysis
+            subject = {
+                'subject_clarity': 0.5,
+                'subject_prominence': 0.5,
+                'background_quality': 0.5
+            }
             
             # Calculate component scores
             technical_score = self._analyze_technical_quality(image, photo_path)
-            composition_score = self._analyze_composition(image)
-            aesthetic_score = self._analyze_aesthetics(image)
-            subject_score = self._analyze_subjects(image, photo_path)
+            composition_score = self._analyze_composition(context)
+            aesthetic_score = self._analyze_aesthetics(context, emotional_impact_score)
+            subject_score = self._analyze_subjects(context, photo_path)
             
-            # Overall score
+            # Calculate base overall score
             overall_score = sum(
                 score * self.weights[aspect]
                 for aspect, score in [
@@ -394,6 +427,30 @@ class QualityRanker:
                     ('subject', subject_score)
                 ]
             )
+            
+            # Decisive moment analysis
+            decisive_moment_data = {
+                'is_decisive_moment': False,
+                'decisive_moment_score': 0.0,
+                'moment_analysis': {}
+            }
+            
+            try:
+                if self.vision_llm_analyzer and self.vision_llm_analyzer.enabled:
+                    moment_result = self.vision_llm_analyzer.detect_moment(photo_path)
+                    if moment_result and 'parsed' in moment_result:
+                        decisive_moment_data['moment_analysis'] = moment_result['parsed']
+                        decisive_moment_data['is_decisive_moment'] = moment_result['parsed'].get('is_decisive_moment', False)
+                        decisive_moment_data['decisive_moment_score'] = moment_result['parsed'].get('decisive_moment_score', 0.0)
+                        
+                        # Apply decisive moment bonus
+                        if decisive_moment_data['is_decisive_moment'] and decisive_moment_data['decisive_moment_score'] > 0.7:
+                            overall_score *= 1.2
+            except Exception as e:
+                logger.warning(f"Decisive moment analysis failed: {e}")
+            
+            # Ensure score is in valid range
+            overall_score = max(0.0, min(1.0, overall_score))
             
             return {
                 'overall_score': overall_score,
@@ -407,11 +464,15 @@ class QualityRanker:
                     'technical': technical,
                     'composition': composition,
                     'aesthetic': aesthetic,
-                    'subject': subject
+                    'subject': subject,
+                    'emotional_impact': emotional_analysis,
+                    'decisive_moment': decisive_moment_data
                 },
                 'weights': self.weights,
                 'file_path': str(photo_path),
-                'file_name': photo_path.name
+                'file_name': photo_path.name,
+                'is_decisive_moment': decisive_moment_data['is_decisive_moment'],
+                'decisive_moment_score': decisive_moment_data['decisive_moment_score']
             }
             
         except Exception as e:
