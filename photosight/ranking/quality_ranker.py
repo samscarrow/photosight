@@ -31,13 +31,36 @@ class QualityRanker:
         self.config = config
         self.ranking_config = config.get('ranking', {})
         
-        # Weight factors for different quality aspects
-        self.weights = self.ranking_config.get('weights', {
+        # Base weight factors for different quality aspects
+        self.base_weights = self.ranking_config.get('weights', {
             'technical': 0.3,
             'composition': 0.25,
             'aesthetic': 0.25,
             'subject': 0.2
         })
+        
+        # Dynamic emotional weighting configuration
+        self.emotional_weights = self.ranking_config.get('emotional_weights', {
+            'joy': {'aesthetic': 1.4, 'face': 1.2},
+            'excitement': {'aesthetic': 1.3, 'subject': 1.2},
+            'engagement': {'subject': 1.3, 'composition': 1.1},
+            'focus': {'technical': 1.2, 'subject': 1.1},
+            'inspiration': {'aesthetic': 1.5, 'composition': 1.2},
+            'breakthrough': {'aesthetic': 1.3, 'subject': 1.4},
+            'insight': {'subject': 1.2, 'composition': 1.1}
+        })
+        
+        # Scene-specific weight adjustments  
+        self.scene_weights = self.ranking_config.get('scene_weights', {
+            'portrait': {'face': 1.5, 'subject': 1.3, 'technical': 1.1},
+            'presentation': {'subject': 1.4, 'composition': 1.2},
+            'workshop/discussion': {'subject': 1.2, 'aesthetic': 1.1},
+            'networking': {'face': 1.3, 'subject': 1.2},
+            'group': {'composition': 1.4, 'subject': 1.2}
+        })
+        
+        # Decisive moment bonus multiplier
+        self.decisive_moment_bonus = self.ranking_config.get('decisive_moment_bonus', 1.25)
         
         # Initialize analyzers lazily
         self._technical_analyzer = None
@@ -177,11 +200,24 @@ class QualityRanker:
                 logger.warning(f"Subject analysis failed for {photo_path}: {e}")
                 scores['subject'] = 0.5
             
-            # Calculate weighted overall score
+            # Get semantic analysis for dynamic weighting
+            semantic_data = {}
+            try:
+                if self.vision_llm_analyzer and self.vision_llm_analyzer.enabled:
+                    semantic_analysis = self.vision_llm_analyzer.analyze_photo(photo_path)
+                    if semantic_analysis and 'parsed' in semantic_analysis:
+                        semantic_data = semantic_analysis['parsed']
+            except Exception as e:
+                logger.debug(f"Semantic analysis unavailable for {photo_path}: {e}")
+            
+            # Calculate dynamic weights based on semantic content
+            dynamic_weights = self._calculate_dynamic_weights(semantic_data)
+            
+            # Calculate weighted overall score with dynamic weights
             overall_score = sum(
-                scores[aspect] * self.weights[aspect]
+                scores[aspect] * dynamic_weights.get(aspect, self.base_weights.get(aspect, 0))
                 for aspect in scores.keys()
-                if aspect in self.weights
+                if aspect in self.base_weights or aspect in dynamic_weights
             )
             
             # Decisive moment detection and bonus (vision LLM analysis)
@@ -195,10 +231,10 @@ class QualityRanker:
                         is_decisive_moment = parsed.get('is_decisive_moment', False)
                         decisive_moment_score = parsed.get('decisive_moment_score', 0.0)
                         
-                        # Apply decisive moment bonus - 20% bonus for true decisive moments
+                        # Apply decisive moment bonus
                         if is_decisive_moment and decisive_moment_score > 0.7:
-                            overall_score *= 1.2
-                            logger.debug(f"Applied decisive moment bonus to {photo_path.name}")
+                            overall_score *= self.decisive_moment_bonus
+                            logger.debug(f"Applied decisive moment bonus ({self.decisive_moment_bonus}x) to {photo_path.name}")
                         
                         # Store decisive moment info for later use
                         scores['is_decisive_moment'] = is_decisive_moment
@@ -225,6 +261,54 @@ class QualityRanker:
         except Exception as e:
             logger.error(f"Error ranking photo {photo_path}: {e}")
             return 0.0
+    
+    def _calculate_dynamic_weights(self, semantic_data: Dict) -> Dict[str, float]:
+        """
+        Calculate dynamic weights based on semantic analysis of the photo.
+        
+        Adjusts base weights based on:
+        - Dominant emotion (joy → higher aesthetic weight)
+        - Scene type (portrait → higher face weight)
+        - Content context (presentation → higher subject weight)
+        
+        Args:
+            semantic_data: Parsed semantic analysis results
+            
+        Returns:
+            Dictionary of adjusted weights
+        """
+        # Start with base weights
+        weights = self.base_weights.copy()
+        
+        # Apply emotional weighting
+        dominant_emotion = semantic_data.get('dominant_emotion')
+        if dominant_emotion and dominant_emotion in self.emotional_weights:
+            emotion_adjustments = self.emotional_weights[dominant_emotion]
+            for aspect, multiplier in emotion_adjustments.items():
+                if aspect in weights:
+                    weights[aspect] *= multiplier
+                    logger.debug(f"Applied emotion '{dominant_emotion}' weight: {aspect} *= {multiplier}")
+        
+        # Apply scene-specific weighting
+        scene = semantic_data.get('scene')
+        if scene and scene in self.scene_weights:
+            scene_adjustments = self.scene_weights[scene]
+            for aspect, multiplier in scene_adjustments.items():
+                if aspect in weights:
+                    weights[aspect] *= multiplier
+                    logger.debug(f"Applied scene '{scene}' weight: {aspect} *= {multiplier}")
+        
+        # Normalize weights to ensure they still sum to approximately 1.0
+        total_weight = sum(weights.values())
+        if total_weight > 0:
+            normalization_factor = 1.0 / total_weight
+            weights = {aspect: weight * normalization_factor for aspect, weight in weights.items()}
+        
+        # Add face weight if not present but needed
+        if 'face' not in weights:
+            weights['face'] = 0.0
+        
+        return weights
     
     def rank_photos_batch(self, photo_paths: List[Union[str, Path]], 
                          progress_callback: Optional[callable] = None) -> List[Tuple[Path, float]]:

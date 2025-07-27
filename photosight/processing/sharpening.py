@@ -12,7 +12,7 @@ from scipy import ndimage
 from scipy.signal import convolve2d
 from typing import Tuple, Optional, Literal
 import cv2
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -50,9 +50,9 @@ class OutputSharpeningSettings:
 @dataclass
 class SharpeningSettings:
     """Complete sharpening settings for all stages."""
-    input_sharpening: InputSharpeningSettings = InputSharpeningSettings()
-    creative_sharpening: CreativeSharpeningSettings = CreativeSharpeningSettings()
-    output_sharpening: OutputSharpeningSettings = OutputSharpeningSettings()
+    input_sharpening: InputSharpeningSettings = field(default_factory=InputSharpeningSettings)
+    creative_sharpening: CreativeSharpeningSettings = field(default_factory=CreativeSharpeningSettings)
+    output_sharpening: OutputSharpeningSettings = field(default_factory=OutputSharpeningSettings)
 
 
 class SharpeningPipeline:

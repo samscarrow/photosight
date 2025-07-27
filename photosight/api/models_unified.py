@@ -1,15 +1,29 @@
 """
-Unified Pydantic models for PhotoSight API with automatic validation.
-This replaces the dual dataclass/Pydantic model system with a single,
-consistent Pydantic-based approach.
+Unified Pydantic models for PhotoSight API with comprehensive validation
+
+This module replaces both the dataclass-based models.py and models_pydantic.py
+to provide a single source of truth for API data structures with robust validation.
 """
 
 from pydantic import BaseModel, Field, field_validator, ConfigDict
-from typing import Optional, List, Dict, Any, Union, Literal
+from typing import Optional, List, Dict, Any, Union, Literal, Tuple
 from datetime import datetime
-from uuid import UUID
-import uuid
+from uuid import UUID, uuid4
 from enum import Enum
+
+
+# Base Configuration
+class PhotoSightBaseModel(BaseModel):
+    """Base model with common configuration for PhotoSight models"""
+    model_config = ConfigDict(
+        str_strip_whitespace=True,
+        validate_assignment=True,
+        arbitrary_types_allowed=True,
+        json_encoders={
+            datetime: lambda v: v.isoformat(),
+            UUID: lambda v: str(v)
+        }
+    )
 
 
 # ========== Enums ==========
@@ -73,17 +87,7 @@ class Priority(str, Enum):
 
 # ========== Base Models ==========
 
-class BaseResponse(BaseModel):
-    """Base response model with common fields"""
-    model_config = ConfigDict(
-        json_encoders={
-            datetime: lambda v: v.isoformat(),
-            UUID: lambda v: str(v)
-        }
-    )
-
-
-class APIResponse(BaseResponse):
+class APIResponse(PhotoSightBaseModel):
     """Standard API response wrapper."""
     status: APIStatus
     data: Optional[Any] = None
@@ -92,21 +96,30 @@ class APIResponse(BaseResponse):
     request_id: Optional[str] = None
 
 
-class ErrorResponse(BaseResponse):
-    """Error response model"""
-    error: str
-    message: str
-    details: Optional[Dict[str, Any]] = None
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+class ErrorResponse(APIResponse):
+    """Error response with additional context."""
+    status: APIStatus = APIStatus.ERROR
+    error_code: Optional[str] = None
+    error_details: Optional[Dict[str, Any]] = None
+
+
+class PaginatedResponse(PhotoSightBaseModel):
+    """Paginated response wrapper"""
+    items: List[Any]
+    total: int = Field(ge=0)
+    page: int = Field(ge=1)
+    per_page: int = Field(ge=1, le=100)
+    has_next: bool
+    has_prev: bool
 
 
 # ========== Processing Models ==========
 
-class ProcessingRecipe(BaseModel):
-    """Photo processing recipe with validation"""
+class ProcessingRecipe(PhotoSightBaseModel):
+    """Complete processing recipe with validation"""
     
     # Basic adjustments
-    exposure: float = Field(default=0.0, ge=-5.0, le=5.0)
+    exposure: float = Field(default=0.0, ge=-5.0, le=5.0, description="Exposure adjustment in stops")
     contrast: float = Field(default=0.0, ge=-100.0, le=100.0)
     highlights: float = Field(default=0.0, ge=-100.0, le=100.0)
     shadows: float = Field(default=0.0, ge=-100.0, le=100.0)
@@ -119,31 +132,16 @@ class ProcessingRecipe(BaseModel):
     temperature: float = Field(default=0.0, ge=-10000.0, le=10000.0)
     tint: float = Field(default=0.0, ge=-100.0, le=100.0)
     
-    # Sharpening
-    sharpen_amount: float = Field(default=0.0, ge=0.0, le=150.0)
-    sharpen_radius: float = Field(default=1.0, ge=0.5, le=3.0)
-    sharpen_detail: float = Field(default=25.0, ge=0.0, le=100.0)
-    sharpen_masking: float = Field(default=0.0, ge=0.0, le=100.0)
-    
-    # Noise reduction
-    luminance_nr: float = Field(default=0.0, ge=0.0, le=100.0)
-    color_nr: float = Field(default=0.0, ge=0.0, le=100.0)
-    
-    # Lens corrections
+    # Presence adjustments
+    clarity: float = Field(default=0.0, ge=-100.0, le=100.0)
+    texture: float = Field(default=0.0, ge=-100.0, le=100.0)
     vignette_amount: float = Field(default=0.0, ge=-100.0, le=100.0)
-    distortion_amount: float = Field(default=0.0, ge=-100.0, le=100.0)
     
-    # Geometry
-    rotation: float = Field(default=0.0, ge=-180.0, le=180.0)
+    # Geometry (optional crop)
     crop: Optional[Dict[str, float]] = None
-    
-    # Local adjustments (if enabled)
-    local_adjustments: Optional[List[Dict[str, Any]]] = None
     
     # Advanced options
     auto_tone: bool = Field(default=False)
-    auto_white_balance: bool = Field(default=False)
-    scene_based_optimization: bool = Field(default=True)
     
     @field_validator('crop')
     @classmethod
@@ -188,7 +186,7 @@ class BatchProcessingRequest(BaseModel):
 
 class SessionInfo(BaseModel):
     """Editing session information"""
-    session_id: UUID = Field(default_factory=uuid.uuid4)
+    session_id: UUID = Field(default_factory=uuid4)
     photo_id: UUID
     state: SessionState = SessionState.CREATED
     created_at: datetime = Field(default_factory=datetime.utcnow)

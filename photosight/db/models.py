@@ -13,6 +13,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship, declarative_base
 from sqlalchemy.sql import func
+from typing import Dict, Any, List, Optional
 import enum
 
 Base = declarative_base()
@@ -347,6 +348,7 @@ class Photo(Base):
     yolo_detection_runs = relationship("YOLODetectionRun", back_populates="photo", cascade="all, delete-orphan")
     yolo_detections = relationship("YOLODetection", back_populates="photo", cascade="all, delete-orphan")
     yolo_stats = relationship("YOLODetectionStats", back_populates="photo", uselist=False, cascade="all, delete-orphan")
+    smart_albums = relationship("SmartAlbum", secondary="smart_album_photos", back_populates="photos")
     
     # Metadata relationships
     keywords = relationship("Keyword", secondary=photo_keywords, back_populates="photos")
@@ -967,4 +969,188 @@ class AlbumTag(Base):
     __table_args__ = (
         Index('idx_album_tags_updated', 'updated_at'),
         Index('idx_album_tags_public_updated', 'is_public', 'updated_at'),
+    )
+
+
+class SmartAlbumRule(enum.Enum):
+    """Smart album rule operators."""
+    EQUALS = "equals"
+    NOT_EQUALS = "not_equals"
+    GREATER_THAN = "greater_than"
+    LESS_THAN = "less_than"
+    CONTAINS = "contains"
+    NOT_CONTAINS = "not_contains"
+    IN = "in"
+    NOT_IN = "not_in"
+    EXISTS = "exists"
+    NOT_EXISTS = "not_exists"
+
+
+class SmartAlbum(Base):
+    """
+    Smart Albums that automatically include photos based on semantic analysis criteria.
+    
+    Examples:
+    - "Keynote Moments": dominant_emotion = "engagement" AND scene = "presentation"
+    - "Best Candids": is_decisive_moment = True AND scene = "workshop/discussion"
+    - "High-Energy Interactions": mood = "energetic" AND participant_count > 5
+    """
+    __tablename__ = 'smart_albums'
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(200), nullable=False, index=True)
+    description = Column(Text)
+    
+    # Smart criteria configuration
+    criteria = Column(JSONB, nullable=False)  # List of rule dictionaries
+    logical_operator = Column(String(10), default='AND')  # 'AND' or 'OR' between rules
+    
+    # Display and organization
+    icon = Column(String(50))  # Icon name for UI
+    color = Column(String(20))  # Hex color for UI
+    sort_by = Column(String(50), default='ai_overall_score')
+    sort_order = Column(String(10), default='desc')
+    
+    # Management
+    is_active = Column(Boolean, default=True, index=True)
+    auto_update = Column(Boolean, default=True)  # Update when new photos match
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    created_by = Column(String(100))
+    
+    # Performance optimization
+    last_updated = Column(DateTime)
+    photo_count = Column(Integer, default=0)
+    last_scan_at = Column(DateTime)
+    
+    # Emotional weighting overrides for photos in this album
+    emotional_weights = Column(JSONB, default={})  # {"aesthetic_weight": 1.2, "subject_weight": 0.8}
+    
+    # Privacy/sharing
+    is_public = Column(Boolean, default=False)
+    share_token = Column(String(100), unique=True)
+    
+    # Relationships
+    photos = relationship("Photo", secondary="smart_album_photos", back_populates="smart_albums")
+    
+    def matches_photo(self, analysis_data: Dict[str, Any]) -> bool:
+        """Check if a photo's analysis data matches this smart album's criteria."""
+        if not self.criteria:
+            return False
+            
+        rule_results = []
+        for rule in self.criteria:
+            field = rule.get('field')
+            operator = SmartAlbumRule(rule.get('operator'))
+            value = rule.get('value')
+            
+            # Get the field value from analysis data
+            field_value = self._get_nested_value(analysis_data, field)
+            
+            # Apply the rule
+            result = self._apply_rule(field_value, operator, value)
+            rule_results.append(result)
+        
+        # Combine results based on logical operator
+        if self.logical_operator == 'OR':
+            return any(rule_results)
+        else:  # AND
+            return all(rule_results)
+    
+    def _get_nested_value(self, data: Dict[str, Any], field_path: str) -> Any:
+        """Get a nested value from analysis data using dot notation."""
+        keys = field_path.split('.')
+        value = data
+        
+        for key in keys:
+            if isinstance(value, dict) and key in value:
+                value = value[key]
+            else:
+                return None
+        
+        return value
+    
+    def _apply_rule(self, field_value: Any, operator: SmartAlbumRule, target_value: Any) -> bool:
+        """Apply a rule operator to compare field_value with target_value."""
+        if field_value is None:
+            return operator in [SmartAlbumRule.NOT_EXISTS, SmartAlbumRule.NOT_EQUALS]
+        
+        if operator == SmartAlbumRule.EQUALS:
+            return field_value == target_value
+        elif operator == SmartAlbumRule.NOT_EQUALS:
+            return field_value != target_value
+        elif operator == SmartAlbumRule.GREATER_THAN:
+            return float(field_value) > float(target_value)
+        elif operator == SmartAlbumRule.LESS_THAN:
+            return float(field_value) < float(target_value)
+        elif operator == SmartAlbumRule.CONTAINS:
+            return str(target_value).lower() in str(field_value).lower()
+        elif operator == SmartAlbumRule.NOT_CONTAINS:
+            return str(target_value).lower() not in str(field_value).lower()
+        elif operator == SmartAlbumRule.IN:
+            return field_value in target_value
+        elif operator == SmartAlbumRule.NOT_IN:
+            return field_value not in target_value
+        elif operator == SmartAlbumRule.EXISTS:
+            return field_value is not None
+        elif operator == SmartAlbumRule.NOT_EXISTS:
+            return field_value is None
+        
+        return False
+    
+    __table_args__ = (
+        Index('idx_smart_album_active', 'is_active', 'auto_update'),
+        Index('idx_smart_album_updated', 'last_updated'),
+        Index('idx_smart_album_public', 'is_public', 'share_token'),
+    )
+
+
+# Association table for smart album photos (many-to-many)
+smart_album_photos = Table(
+    'smart_album_photos',
+    Base.metadata,
+    Column('smart_album_id', Integer, ForeignKey('smart_albums.id', ondelete='CASCADE'), primary_key=True),
+    Column('photo_id', Integer, ForeignKey('photos.id', ondelete='CASCADE'), primary_key=True),
+    Column('added_at', DateTime, default=func.now()),
+    Column('match_score', Float),  # How well the photo matches the criteria
+    Index('idx_smart_album_photos_album', 'smart_album_id', 'added_at'),
+    Index('idx_smart_album_photos_photo', 'photo_id'),
+    Index('idx_smart_album_photos_score', 'match_score'),
+)
+
+
+class SmartAlbumTemplate(Base):
+    """
+    Pre-built smart album templates for common use cases.
+    Users can create smart albums from these templates.
+    """
+    __tablename__ = 'smart_album_templates'
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(200), nullable=False, index=True)
+    description = Column(Text)
+    category = Column(String(100), index=True)  # "workshop", "portrait", "landscape", etc.
+    
+    # Template configuration
+    criteria_template = Column(JSONB, nullable=False)
+    logical_operator = Column(String(10), default='AND')
+    suggested_name = Column(String(200))
+    suggested_icon = Column(String(50))
+    suggested_color = Column(String(20))
+    
+    # Emotional weighting suggestions
+    suggested_weights = Column(JSONB, default={})
+    
+    # Usage and popularity
+    usage_count = Column(Integer, default=0)
+    is_featured = Column(Boolean, default=False, index=True)
+    
+    # Management
+    created_at = Column(DateTime, default=func.now())
+    created_by = Column(String(100))
+    is_active = Column(Boolean, default=True)
+    
+    __table_args__ = (
+        Index('idx_smart_album_template_category', 'category', 'is_featured'),
+        Index('idx_smart_album_template_usage', 'usage_count', 'is_featured'),
     )

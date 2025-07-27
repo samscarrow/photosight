@@ -1,6 +1,11 @@
 """
-Improved WebSocket event emitters with standardized Redis message structure.
-Provides real-time updates from Celery tasks with better multi-worker support.
+Improved WebSocket events with standardized Redis message structure and enhanced reliability.
+
+This module provides a more robust WebSocket implementation with:
+- Standardized message format with room and namespace information
+- Enhanced error handling and retry logic
+- Better separation of concerns between Redis publishing and WebSocket emission
+- Backward compatibility with existing code
 """
 
 import json
@@ -9,9 +14,14 @@ import os
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 from threading import Thread
+from contextlib import suppress
 
 import redis
 from flask_socketio import SocketIO
+
+# Configuration
+REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
+WEBSOCKET_CHANNEL = 'websocket_broadcast'
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +41,8 @@ class RedisWebSocketBridge:
             redis_url: Redis connection URL
         """
         self.socketio = socketio
-        self.redis_url = redis_url or os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
-        self.redis_client = redis.from_url(self.redis_url)
+        self.redis_url = redis_url or REDIS_URL
+        self.redis_client = redis.from_url(self.redis_url, decode_responses=True)
         self.pubsub = self.redis_client.pubsub()
         self.running = False
         self.thread = None
@@ -43,7 +53,7 @@ class RedisWebSocketBridge:
             return
             
         self.running = True
-        self.pubsub.subscribe('websocket_broadcast')
+        self.pubsub.subscribe(WEBSOCKET_CHANNEL)
         self.thread = Thread(target=self._listen, daemon=True)
         self.thread.start()
         logger.info("Redis WebSocket bridge started")
@@ -51,7 +61,9 @@ class RedisWebSocketBridge:
     def stop(self) -> None:
         """Stop listening to Redis events."""
         self.running = False
-        self.pubsub.unsubscribe('websocket_broadcast')
+        with suppress(Exception):
+            self.pubsub.unsubscribe(WEBSOCKET_CHANNEL)
+            self.pubsub.close()
         if self.thread:
             self.thread.join(timeout=1)
         logger.info("Redis WebSocket bridge stopped")
@@ -103,8 +115,8 @@ class WebSocketEmitter:
         Args:
             redis_url: Redis connection URL
         """
-        self.redis_url = redis_url or os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
-        self.redis_client = redis.from_url(self.redis_url)
+        self.redis_url = redis_url or REDIS_URL
+        self.redis_client = redis.from_url(self.redis_url, decode_responses=True)
         
     def emit(self, event: str, payload: Dict[str, Any], 
              room: Optional[str] = None, namespace: str = '/') -> None:
@@ -126,7 +138,9 @@ class WebSocketEmitter:
         }
         
         try:
-            self.redis_client.publish('websocket_broadcast', json.dumps(message))
+            result = self.redis_client.publish(WEBSOCKET_CHANNEL, json.dumps(message))
+            if result == 0:
+                logger.warning(f"No subscribers for WebSocket event: {event}")
         except Exception as e:
             logger.error(f"Failed to publish to Redis: {e}")
     

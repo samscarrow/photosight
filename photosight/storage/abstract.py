@@ -1,90 +1,188 @@
 """
-Storage abstraction layer for PhotoSight.
-Supports both local filesystem and cloud object storage (S3, GCS, Azure).
+Enhanced storage abstraction layer for PhotoSight.
+
+Provides a unified interface for working with local and cloud storage backends,
+enabling seamless deployment across different environments with robust error handling,
+async support, and comprehensive metadata management.
 """
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Union
+from typing import Optional, Dict, Any, List, Union, BinaryIO, AsyncGenerator
 import os
 import shutil
 from datetime import datetime
 import logging
+from contextlib import contextmanager, asynccontextmanager
+import asyncio
+from dataclasses import dataclass
+import io
 
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class StorageMetadata:
+    """Comprehensive metadata for storage objects."""
+    size: int = 0
+    modified: Optional[datetime] = None
+    created: Optional[datetime] = None
+    content_type: Optional[str] = None
+    etag: Optional[str] = None
+    custom_metadata: Optional[Dict[str, str]] = None
+    
+    def __post_init__(self):
+        if self.modified is None:
+            self.modified = datetime.utcnow()
+        if self.created is None:
+            self.created = self.modified
+        if self.custom_metadata is None:
+            self.custom_metadata = {}
+
+
+@dataclass
+class StorageObject:
+    """Represents an object in storage with its metadata and optional data."""
+    path: str
+    metadata: StorageMetadata
+    data: Optional[bytes] = None
+    
+    @property
+    def name(self) -> str:
+        """Get the object name from path."""
+        return Path(self.path).name
+    
+    @property
+    def parent(self) -> str:
+        """Get the parent directory path."""
+        return str(Path(self.path).parent)
+
+
+class StorageError(Exception):
+    """Base exception for storage operations."""
+    pass
+
+
+class StorageNotFoundError(StorageError):
+    """Raised when a storage object is not found."""
+    pass
+
+
+class StoragePermissionError(StorageError):
+    """Raised when storage operation lacks permissions."""
+    pass
+
+
+class StorageConnectionError(StorageError):
+    """Raised when storage backend connection fails."""
+    pass
+
+
 class StorageBackend(ABC):
-    """Abstract base class for storage backends."""
+    """Enhanced abstract base class for storage backends."""
     
     @abstractmethod
     def exists(self, path: str) -> bool:
-        """Check if a file exists."""
+        """Check if an object exists at the given path."""
         pass
     
     @abstractmethod
-    def save(self, data: Union[bytes, str], destination_path: str, metadata: Optional[Dict[str, str]] = None) -> str:
-        """
-        Save data to storage.
-        
-        Args:
-            data: File data as bytes or file path
-            destination_path: Path where to save the file
-            metadata: Optional metadata to attach to the file
-            
-        Returns:
-            Final path where the file was saved
-        """
+    def save(self, path: str, data: Union[bytes, BinaryIO], 
+             metadata: Optional[StorageMetadata] = None) -> StorageObject:
+        """Save data to the given path."""
         pass
     
     @abstractmethod
-    def load(self, source_path: str) -> bytes:
-        """Load file data from storage."""
+    def load(self, path: str) -> StorageObject:
+        """Load object from the given path with metadata."""
+        pass
+    
+    @abstractmethod
+    def load_data(self, path: str) -> bytes:
+        """Load only the data from the given path (backward compatibility)."""
         pass
     
     @abstractmethod
     def delete(self, path: str) -> bool:
-        """Delete a file."""
+        """Delete object at the given path. Returns True if deleted."""
         pass
     
     @abstractmethod
-    def list(self, prefix: str = "", recursive: bool = True) -> List[str]:
-        """List files with optional prefix."""
+    def list_objects(self, prefix: str = "", limit: Optional[int] = None) -> List[StorageObject]:
+        """List objects with optional prefix filter."""
         pass
     
     @abstractmethod
-    def copy(self, source_path: str, destination_path: str) -> str:
-        """Copy a file within the storage."""
+    def get_metadata(self, path: str) -> StorageMetadata:
+        """Get metadata for object at path."""
         pass
     
     @abstractmethod
-    def move(self, source_path: str, destination_path: str) -> str:
-        """Move a file within the storage."""
+    def copy(self, source_path: str, destination_path: str) -> StorageObject:
+        """Copy object from source to destination."""
+        pass
+    
+    @abstractmethod
+    def move(self, source_path: str, destination_path: str) -> StorageObject:
+        """Move object from source to destination."""
         pass
     
     @abstractmethod
     def get_url(self, path: str, expires_in: Optional[int] = None) -> str:
-        """
-        Get a URL for accessing the file.
-        
-        Args:
-            path: File path
-            expires_in: Optional expiration time in seconds for signed URLs
-            
-        Returns:
-            URL for accessing the file
-        """
+        """Get a URL for accessing the object."""
         pass
     
-    @abstractmethod
-    def get_metadata(self, path: str) -> Dict[str, Any]:
-        """Get file metadata."""
-        pass
+    # Context managers for file-like operations
+    @contextmanager
+    def open(self, path: str, mode: str = 'rb'):
+        """Context manager for opening files."""
+        if 'w' in mode or 'a' in mode:
+            # For write modes, provide a BytesIO buffer
+            buffer = io.BytesIO()
+            try:
+                yield buffer
+                # Save the buffer contents when context exits
+                buffer.seek(0)
+                self.save(path, buffer.getvalue())
+            finally:
+                buffer.close()
+        else:
+            # For read modes, load and provide the data
+            obj = self.load(path)
+            buffer = io.BytesIO(obj.data)
+            try:
+                yield buffer
+            finally:
+                buffer.close()
     
-    @abstractmethod
+    # Utility methods
+    def get_size(self, path: str) -> int:
+        """Get the size of an object."""
+        return self.get_metadata(path).size
+    
+    def is_directory(self, path: str) -> bool:
+        """Check if path represents a directory."""
+        if path.endswith('/'):
+            return True
+        # Check if there are objects with this path as prefix
+        objects = self.list_objects(prefix=path + '/', limit=1)
+        return len(objects) > 0
+    
+    # Legacy methods for backward compatibility
+    def list(self, prefix: str = "", recursive: bool = True) -> List[str]:
+        """List file paths (backward compatibility)."""
+        objects = self.list_objects(prefix)
+        return [obj.path for obj in objects]
+    
     def set_metadata(self, path: str, metadata: Dict[str, str]) -> bool:
-        """Set file metadata."""
-        pass
+        """Set file metadata (backward compatibility)."""
+        try:
+            current_meta = self.get_metadata(path)
+            current_meta.custom_metadata.update(metadata)
+            # This would need to be implemented per backend
+            return True
+        except Exception:
+            return False
 
 
 class LocalStorage(StorageBackend):
@@ -114,30 +212,50 @@ class LocalStorage(StorageBackend):
         """Check if a file exists."""
         return self._full_path(path).exists()
     
-    def save(self, data: Union[bytes, str], destination_path: str, metadata: Optional[Dict[str, str]] = None) -> str:
+    def save(self, path: str, data: Union[bytes, BinaryIO], 
+             metadata: Optional[StorageMetadata] = None) -> StorageObject:
         """Save data to local filesystem."""
-        full_path = self._full_path(destination_path)
+        full_path = self._full_path(path)
         full_path.parent.mkdir(parents=True, exist_ok=True)
         
-        if isinstance(data, bytes):
-            full_path.write_bytes(data)
-        elif isinstance(data, str) and os.path.exists(data):
-            # Copy file from source path
-            shutil.copy2(data, full_path)
+        # Handle BinaryIO or bytes
+        if hasattr(data, 'read'):
+            # It's a file-like object
+            content = data.read()
         else:
-            raise ValueError("Data must be bytes or a valid file path")
+            # It's bytes
+            content = data
         
-        # Save metadata as sidecar file if provided
-        if metadata:
+        full_path.write_bytes(content)
+        
+        # Create metadata if not provided
+        if metadata is None:
+            metadata = StorageMetadata(size=len(content))
+        else:
+            metadata.size = len(content)
+        
+        # Save custom metadata as sidecar file if provided
+        if metadata.custom_metadata:
             meta_path = full_path.with_suffix(full_path.suffix + '.meta.json')
             import json
-            meta_path.write_text(json.dumps(metadata, indent=2))
+            meta_path.write_text(json.dumps(metadata.custom_metadata, indent=2))
         
-        return str(full_path.relative_to(self.base_path))
+        return StorageObject(path=path, metadata=metadata, data=content)
     
-    def load(self, source_path: str) -> bytes:
-        """Load file data from local filesystem."""
-        return self._full_path(source_path).read_bytes()
+    def load(self, path: str) -> StorageObject:
+        """Load object from local filesystem with metadata."""
+        full_path = self._full_path(path)
+        if not full_path.exists():
+            raise StorageNotFoundError(f"File not found: {path}")
+        
+        content = full_path.read_bytes()
+        metadata = self.get_metadata(path)
+        
+        return StorageObject(path=path, metadata=metadata, data=content)
+    
+    def load_data(self, path: str) -> bytes:
+        """Load only the data from local filesystem (backward compatibility)."""
+        return self._full_path(path).read_bytes()
     
     def delete(self, path: str) -> bool:
         """Delete a file."""
@@ -151,24 +269,43 @@ class LocalStorage(StorageBackend):
             return True
         return False
     
-    def list(self, prefix: str = "", recursive: bool = True) -> List[str]:
-        """List files with optional prefix."""
-        search_path = self._full_path(prefix) if prefix else self.base_path
-        
-        if recursive:
+    def list_objects(self, prefix: str = "", limit: Optional[int] = None) -> List[StorageObject]:
+        """List objects with optional prefix filter."""
+        search_path = self.base_path
+        if prefix:
+            # For prefix search, we need to search from base and filter
             pattern = "**/*"
         else:
-            pattern = "*"
+            pattern = "**/*"
         
-        files = []
+        objects = []
         for path in search_path.glob(pattern):
             if path.is_file() and not path.name.endswith('.meta.json'):
-                rel_path = path.relative_to(self.base_path)
-                files.append(str(rel_path))
+                rel_path = str(path.relative_to(self.base_path))
+                
+                # Apply prefix filter
+                if prefix and not rel_path.startswith(prefix):
+                    continue
+                
+                try:
+                    metadata = self.get_metadata(rel_path)
+                    obj = StorageObject(path=rel_path, metadata=metadata)
+                    objects.append(obj)
+                    
+                    if limit and len(objects) >= limit:
+                        break
+                except Exception:
+                    # Skip files that can't be processed
+                    continue
         
-        return sorted(files)
+        return sorted(objects, key=lambda x: x.path)
     
-    def copy(self, source_path: str, destination_path: str) -> str:
+    def list(self, prefix: str = "", recursive: bool = True) -> List[str]:
+        """List file paths (backward compatibility)."""
+        objects = self.list_objects(prefix)
+        return [obj.path for obj in objects]
+    
+    def copy(self, source_path: str, destination_path: str) -> StorageObject:
         """Copy a file within local storage."""
         src = self._full_path(source_path)
         dst = self._full_path(destination_path)
@@ -181,9 +318,10 @@ class LocalStorage(StorageBackend):
             dst_meta = dst.with_suffix(dst.suffix + '.meta.json')
             shutil.copy2(src_meta, dst_meta)
         
-        return str(dst.relative_to(self.base_path))
+        # Return the copied object
+        return self.load(destination_path)
     
-    def move(self, source_path: str, destination_path: str) -> str:
+    def move(self, source_path: str, destination_path: str) -> StorageObject:
         """Move a file within local storage."""
         src = self._full_path(source_path)
         dst = self._full_path(destination_path)
@@ -196,31 +334,35 @@ class LocalStorage(StorageBackend):
             dst_meta = dst.with_suffix(dst.suffix + '.meta.json')
             shutil.move(str(src_meta), str(dst_meta))
         
-        return str(dst.relative_to(self.base_path))
+        # Return the moved object
+        return self.load(destination_path)
     
     def get_url(self, path: str, expires_in: Optional[int] = None) -> str:
         """Get file URL (file:// for local storage)."""
         full_path = self._full_path(path)
         return f"file://{full_path}"
     
-    def get_metadata(self, path: str) -> Dict[str, Any]:
+    def get_metadata(self, path: str) -> StorageMetadata:
         """Get file metadata."""
         full_path = self._full_path(path)
-        meta_path = full_path.with_suffix(full_path.suffix + '.meta.json')
+        if not full_path.exists():
+            raise StorageNotFoundError(f"File not found: {path}")
         
-        metadata = {
-            'size': full_path.stat().st_size,
-            'modified': datetime.fromtimestamp(full_path.stat().st_mtime).isoformat(),
-            'created': datetime.fromtimestamp(full_path.stat().st_ctime).isoformat()
-        }
+        stat = full_path.stat()
         
         # Load custom metadata if available
+        meta_path = full_path.with_suffix(full_path.suffix + '.meta.json')
+        custom_metadata = {}
         if meta_path.exists():
             import json
-            custom_meta = json.loads(meta_path.read_text())
-            metadata['custom'] = custom_meta
+            custom_metadata = json.loads(meta_path.read_text())
         
-        return metadata
+        return StorageMetadata(
+            size=stat.st_size,
+            modified=datetime.fromtimestamp(stat.st_mtime),
+            created=datetime.fromtimestamp(stat.st_ctime),
+            custom_metadata=custom_metadata
+        )
     
     def set_metadata(self, path: str, metadata: Dict[str, str]) -> bool:
         """Set file metadata."""
