@@ -158,14 +158,37 @@ Format as JSON with keys: rules_followed, focal_point, balance, negative_space, 
 
 Format as JSON with keys: technical_quality, artistic_merit, story_impact, standout_features, rating, justification"""
     
-    MOMENT_DETECTION = """Identify if this captures a significant moment:
-1. Is this a decisive/peak moment?
-2. Emotional significance (if any)
-3. Context of the moment
-4. Why this moment matters
-5. Related moments to look for
+    MOMENT_DETECTION = """Analyze this photograph for decisive moment characteristics:
 
-Format as JSON with keys: is_decisive_moment, emotion_level, context, significance, related_moments"""
+1. **Peak Action Analysis**: Does this capture the exact instant of peak action, expression, or gesture? Look for:
+   - Athletes at the peak of their movement
+   - Facial expressions caught at their most telling moment
+   - Gestures captured at their most expressive point
+   - Interactions between subjects at their most meaningful instant
+
+2. **Compositional Alignment**: Are the visual elements perfectly aligned in this specific moment?
+   - Multiple subjects in ideal positions relative to each other
+   - Background elements that complement rather than distract
+   - Lighting that enhances the moment's impact
+
+3. **Emotional Resonance**: Does this moment convey a strong, clear emotion or story?
+   - Genuine vs posed expressions
+   - Spontaneous vs contrived interactions
+   - Universal vs specific emotional appeal
+
+4. **Temporal Uniqueness**: Would this exact moment be impossible to recreate?
+   - Fleeting expressions or interactions
+   - Unique alignments of moving elements
+   - Spontaneous reactions or responses
+
+5. **Visual Impact**: Does this moment immediately capture and hold attention?
+   - Clear focal point and story
+   - Strong visual hierarchy
+   - Memorable and distinctive characteristics
+
+Rate the decisive moment quality from 0.0 (not a decisive moment) to 1.0 (perfect decisive moment).
+
+Format as JSON with keys: is_decisive_moment (boolean), decisive_moment_score (0.0-1.0), peak_action_captured (boolean), emotional_impact_level (0.0-1.0), temporal_uniqueness (0.0-1.0), visual_impact (0.0-1.0), moment_description (string), improvement_suggestions (string)"""
     
     CROP_SUGGESTIONS = """Suggest optimal crops for this image:
 1. Identify the main subject(s)
@@ -175,6 +198,15 @@ Format as JSON with keys: is_decisive_moment, emotion_level, context, significan
 5. Recommended primary crop
 
 Format as JSON with keys: main_subjects, crop_options, elements_analysis, impact_analysis, recommended_crop"""
+    
+    EMOTIONAL_IMPACT = """Analyze the emotional impact and content of this photograph:
+1. What emotions does this image evoke in the viewer?
+2. Rate the overall emotional intensity (0.0 = no emotional impact, 1.0 = very strong emotional impact)
+3. Identify the dominant emotion (e.g., joy, serenity, tension, excitement, melancholy, awe, nostalgia)
+4. What specific visual elements contribute to the emotional impact?
+5. How does the composition, lighting, and subject matter enhance the emotional message?
+
+Format as JSON with keys: emotion_score, dominant_emotion, emotional_elements, visual_contributors, composition_impact"""
 
 
 class VisionLLMAnalyzer:
@@ -446,6 +478,45 @@ Format as JSON with keys: moment_description, best_frames, quality_comparison, r
             
         except Exception as e:
             logger.error(f"Burst analysis failed: {e}")
+            return {'error': str(e)}
+    
+    def analyze_emotional_impact(self, image_path: Union[str, Path]) -> Dict:
+        """
+        Analyze the emotional impact of an image using vision LLM.
+        
+        Args:
+            image_path: Path to the image
+            
+        Returns:
+            Emotional impact analysis results with emotion_score and dominant_emotion
+        """
+        if not self.enabled or not self.provider:
+            return {}
+        
+        cache_key = f"emotion_{Path(image_path).name}"
+        if cache_key in self.cache:
+            return self.cache[cache_key]
+        
+        try:
+            result = self.provider.analyze_image(
+                image_path,
+                PhotoAnalysisPrompts.EMOTIONAL_IMPACT
+            )
+            
+            # Parse JSON response
+            if isinstance(result.get('content'), str):
+                try:
+                    cleaned_json = self._clean_json_response(result['content'])
+                    result['parsed'] = json.loads(cleaned_json)
+                except json.JSONDecodeError:
+                    logger.warning("Failed to parse JSON response for emotional impact")
+                    result['parsed'] = {}
+            
+            self.cache[cache_key] = result
+            return result
+            
+        except Exception as e:
+            logger.error(f"Emotional impact analysis failed: {e}")
             return {'error': str(e)}
     
     def clear_cache(self):

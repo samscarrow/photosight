@@ -1,0 +1,127 @@
+{% extends "viewer/base.html" %}
+
+{% block title %}Albums - PhotoSight Viewer{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1 class="h2 mb-0">
+                <i class="bi bi-collection-fill me-2 text-primary"></i>
+                Photo Albums
+            </h1>
+            <div class="text-muted">
+                <i class="bi bi-images me-1"></i>
+                {{ albums|length }} album{{ 's' if albums|length != 1 else '' }}
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if albums %}
+<div class="row">
+    {% for album in albums %}
+    <div class="col-md-6 col-lg-4 mb-4">
+        <div class="card album-card h-100">
+            <div class="position-relative">
+                <img src="{{ album.thumbnail_url }}" 
+                     class="card-img-top photo-thumbnail" 
+                     alt="{{ album.display_name }}"
+                     onerror="this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZGRkIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPk5vIEltYWdlPC90ZXh0Pjwvc3ZnPg=='">
+                <div class="position-absolute top-0 end-0 m-2">
+                    <span class="badge bg-primary">
+                        {{ album.photo_count }} photo{{ 's' if album.photo_count != 1 else '' }}
+                    </span>
+                </div>
+            </div>
+            
+            <div class="card-body">
+                <h5 class="card-title">{{ album.display_name }}</h5>
+                <p class="card-text text-muted">{{ album.description }}</p>
+                
+                <div class="d-flex justify-content-between align-items-center">
+                    <small class="text-muted">
+                        <i class="bi bi-calendar-date me-1"></i>
+                        {{ album.created_at }}
+                    </small>
+                    <a href="/viewer/album/{{ album.tag_name }}" class="btn btn-primary btn-sm">
+                        <i class="bi bi-arrow-right me-1"></i>
+                        View Album
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="row">
+    <div class="col-12">
+        <div class="text-center py-5">
+            <i class="bi bi-collection display-1 text-muted"></i>
+            <h3 class="mt-3 text-muted">No Albums Found</h3>
+            <p class="text-muted">There are currently no albums available to display.</p>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<div class="row mt-5">
+    <div class="col-12">
+        <div class="card bg-primary text-white">
+            <div class="card-body">
+                <div class="row align-items-center">
+                    <div class="col-md-8">
+                        <h5 class="card-title mb-1">
+                            <i class="bi bi-lightbulb-fill me-2"></i>
+                            About This Gallery
+                        </h5>
+                        <p class="card-text mb-0">
+                            This collection showcases photos from an Enneagram workshop, analyzed and curated using 
+                            AI-powered scoring for technical quality, artistic composition, and emotional impact.
+                        </p>
+                    </div>
+                    <div class="col-md-4 text-md-end">
+                        <i class="bi bi-robot display-4 opacity-50"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Add loading states for album cards
+    const albumCards = document.querySelectorAll('.album-card');
+    
+    albumCards.forEach(card => {
+        card.addEventListener('click', function(e) {
+            if (e.target.tagName !== 'A' && e.target.tagName !== 'BUTTON') {
+                const viewButton = card.querySelector('.btn-primary');
+                if (viewButton) {
+                    viewButton.click();
+                }
+            }
+        });
+    });
+    
+    // Lazy loading for thumbnails
+    const images = document.querySelectorAll('img[data-src]');
+    const imageObserver = new IntersectionObserver((entries, observer) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                const img = entry.target;
+                img.src = img.dataset.src;
+                img.removeAttribute('data-src');
+                imageObserver.unobserve(img);
+            }
+        });
+    });
+    
+    images.forEach(img => imageObserver.observe(img));
+});
+</script>
+{% endblock %}

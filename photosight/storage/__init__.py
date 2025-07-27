@@ -1,0 +1,1 @@
+# PhotoSight Storage Module

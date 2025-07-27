@@ -1,0 +1,15 @@
+-- PhotoSight Google Drive ID Batch Updates
+-- This script updates all matching photos with their Google Drive file IDs
+
+-- Batch 1: DSC04933-DSC04924
+UPDATE PHOTOSIGHT.PHOTOS SET file_path = 'gdrive://1gh-NrMXV_rug3UXAc73TDEbYW2LIijy1', cloud_path = 'https://drive.google.com/file/d/1gh-NrMXV_rug3UXAc73TDEbYW2LIijy1/view', sync_status = 'synced', last_sync_at = CURRENT_TIMESTAMP WHERE file_path LIKE '%DSC04933%';
+UPDATE PHOTOSIGHT.PHOTOS SET file_path = 'gdrive://16Jz8iwLLlJ2Me8sBMXQQqKjlfptkANDY', cloud_path = 'https://drive.google.com/file/d/16Jz8iwLLlJ2Me8sBMXQQqKjlfptkANDY/view', sync_status = 'synced', last_sync_at = CURRENT_TIMESTAMP WHERE file_path LIKE '%DSC04930%';
+UPDATE PHOTOSIGHT.PHOTOS SET file_path = 'gdrive://1n1byHARhOO5bwqFhrIXUhcK0RHqyHyyd', cloud_path = 'https://drive.google.com/file/d/1n1byHARhOO5bwqFhrIXUhcK0RHqyHyyd/view', sync_status = 'synced', last_sync_at = CURRENT_TIMESTAMP WHERE file_path LIKE '%DSC04931%';
+UPDATE PHOTOSIGHT.PHOTOS SET file_path = 'gdrive://1u4A0tWATbcoLezsixCRKEg0fpztxXVAU', cloud_path = 'https://drive.google.com/file/d/1u4A0tWATbcoLezsixCRKEg0fpztxXVAU/view', sync_status = 'synced', last_sync_at = CURRENT_TIMESTAMP WHERE file_path LIKE '%DSC04932%';
+UPDATE PHOTOSIGHT.PHOTOS SET file_path = 'gdrive://1DVlvURNh1D26kMG9ZCuKX3fqgFu_aE2k', cloud_path = 'https://drive.google.com/file/d/1DVlvURNh1D26kMG9ZCuKX3fqgFu_aE2k/view', sync_status = 'synced', last_sync_at = CURRENT_TIMESTAMP WHERE file_path LIKE '%DSC04929%';
+UPDATE PHOTOSIGHT.PHOTOS SET file_path = 'gdrive://1gAWFFOLY7lczbNxbMsn_PCeXcRYTm5X0', cloud_path = 'https://drive.google.com/file/d/1gAWFFOLY7lczbNxbMsn_PCeXcRYTm5X0/view', sync_status = 'synced', last_sync_at = CURRENT_TIMESTAMP WHERE file_path LIKE '%DSC04928%';
+UPDATE PHOTOSIGHT.PHOTOS SET file_path = 'gdrive://1KpxWT8bQiJEprCcQu5B2x-dtbE6LOgmE', cloud_path = 'https://drive.google.com/file/d/1KpxWT8bQiJEprCcQu5B2x-dtbE6LOgmE/view', sync_status = 'synced', last_sync_at = CURRENT_TIMESTAMP WHERE file_path LIKE '%DSC04927%';
+UPDATE PHOTOSIGHT.PHOTOS SET file_path = 'gdrive://1jvq2vDK9YFV6T_mksLNAMD2qu6R4Ufkw', cloud_path = 'https://drive.google.com/file/d/1jvq2vDK9YFV6T_mksLNAMD2qu6R4Ufkw/view', sync_status = 'synced', last_sync_at = CURRENT_TIMESTAMP WHERE file_path LIKE '%DSC04926%';
+UPDATE PHOTOSIGHT.PHOTOS SET file_path = 'gdrive://1gf_Vm9bXgeN0XB63BK7Gh0xXh8HjVYi9', cloud_path = 'https://drive.google.com/file/d/1gf_Vm9bXgeN0XB63BK7Gh0xXh8HjVYi9/view', sync_status = 'synced', last_sync_at = CURRENT_TIMESTAMP WHERE file_path LIKE '%DSC04925%';
+UPDATE PHOTOSIGHT.PHOTOS SET file_path = 'gdrive://1hVaSYlnQn99VTbas1TBtUz15V4FQ0ks9', cloud_path = 'https://drive.google.com/file/d/1hVaSYlnQn99VTbas1TBtUz15V4FQ0ks9/view', sync_status = 'synced', last_sync_at = CURRENT_TIMESTAMP WHERE file_path LIKE '%DSC04924%';
+COMMIT;

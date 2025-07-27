@@ -44,6 +44,7 @@ class QualityRanker:
         self._composition_analyzer = None
         self._aesthetic_analyzer = None
         self._subject_analyzer = None
+        self._vision_llm_analyzer = None
         
     @property
     def technical_analyzer(self):
@@ -76,6 +77,18 @@ class QualityRanker:
             from ..processing.production_yolo_blur_processor import ProductionYOLOBlurProcessor
             self._subject_analyzer = ProductionYOLOBlurProcessor(self.config)
         return self._subject_analyzer
+    
+    @property
+    def vision_llm_analyzer(self):
+        """Lazy loading of vision LLM analyzer."""
+        if self._vision_llm_analyzer is None:
+            try:
+                from ..analysis.vision_llm_analyzer import VisionLLMAnalyzer
+                self._vision_llm_analyzer = VisionLLMAnalyzer(self.config)
+            except Exception as e:
+                logger.warning(f"Could not initialize vision LLM analyzer: {e}")
+                self._vision_llm_analyzer = None
+        return self._vision_llm_analyzer
     
     def rank_photo(self, photo_path: Union[str, Path]) -> float:
         """
@@ -112,9 +125,22 @@ class QualityRanker:
                 image_array = np.ascontiguousarray(image_array, dtype=np.uint8)
             
             # Create analysis context with standardized data pipeline
-            context = AnalysisContext(image_array)
+            context = AnalysisContext(image_array, str(photo_path))
             
             scores = {}
+            
+            # Get emotional impact from Vision LLM first (if available)
+            emotional_impact_score = 0.5  # Default fallback
+            try:
+                if self.vision_llm_analyzer and self.vision_llm_analyzer.enabled:
+                    vision_result = self.vision_llm_analyzer.analyze_emotional_impact(photo_path)
+                    vision_analysis = vision_result.get('parsed', {})
+                    if vision_analysis:
+                        emotional_impact_score = vision_analysis.get('emotion_score', 0.5)
+                        emotional_impact_score = max(0.0, min(1.0, float(emotional_impact_score)))
+                        logger.debug(f"Vision LLM emotional impact: {emotional_impact_score:.3f}")
+            except Exception as e:
+                logger.warning(f"Vision LLM emotional analysis failed for {photo_path}: {e}")
             
             # Technical quality analysis
             try:
@@ -133,9 +159,10 @@ class QualityRanker:
                 scores['composition'] = 0.5
             
             # Aesthetic analysis (context provides appropriate data types)
+            # Pass emotional impact score to avoid redundant vision LLM calls
             try:
                 logger.debug(f"Aesthetic analysis - image size: {context.width}x{context.height}, channels: {context.channels}")
-                aesthetic_score = self._analyze_aesthetics(context)
+                aesthetic_score = self._analyze_aesthetics(context, emotional_impact_score)
                 scores['aesthetic'] = aesthetic_score
             except Exception as e:
                 logger.warning(f"Aesthetic analysis failed for {photo_path}: {e}")
@@ -155,6 +182,30 @@ class QualityRanker:
                 for aspect in scores.keys()
                 if aspect in self.weights
             )
+            
+            # Decisive moment detection and bonus (vision LLM analysis)
+            is_decisive_moment = False
+            decisive_moment_score = 0.0
+            try:
+                if self.vision_llm_analyzer and self.vision_llm_analyzer.enabled:
+                    moment_analysis = self.vision_llm_analyzer.detect_moment(photo_path)
+                    if moment_analysis and 'parsed' in moment_analysis:
+                        parsed = moment_analysis['parsed']
+                        is_decisive_moment = parsed.get('is_decisive_moment', False)
+                        decisive_moment_score = parsed.get('decisive_moment_score', 0.0)
+                        
+                        # Apply decisive moment bonus - 20% bonus for true decisive moments
+                        if is_decisive_moment and decisive_moment_score > 0.7:
+                            overall_score *= 1.2
+                            logger.debug(f"Applied decisive moment bonus to {photo_path.name}")
+                        
+                        # Store decisive moment info for later use
+                        scores['is_decisive_moment'] = is_decisive_moment
+                        scores['decisive_moment_score'] = decisive_moment_score
+            except Exception as e:
+                logger.warning(f"Decisive moment analysis failed for {photo_path}: {e}")
+                scores['is_decisive_moment'] = False
+                scores['decisive_moment_score'] = 0.0
             
             # Ensure score is in valid range
             overall_score = max(0.0, min(1.0, overall_score))
@@ -245,11 +296,12 @@ class QualityRanker:
             logger.warning(f"Composition analysis error: {e}")
             return 0.5
     
-    def _analyze_aesthetics(self, context) -> float:
-        """Analyze aesthetic quality using analysis context."""
+    def _analyze_aesthetics(self, context, emotional_impact_score: float) -> float:
+        """Analyze aesthetic quality using analysis context and pre-computed emotional impact."""
         try:
             # Let the aesthetic analyzer request the specific data format it needs
-            analysis = self.aesthetic_analyzer.analyze_aesthetics(context)
+            # Pass emotional impact score to avoid redundant vision LLM calls
+            analysis = self.aesthetic_analyzer.analyze_aesthetics(context, emotional_impact_score)
             
             # Extract aesthetic scores
             color_harmony = analysis.get('color_harmony', 0.5)
@@ -257,12 +309,15 @@ class QualityRanker:
             saturation = analysis.get('saturation_score', 0.5)
             overall_appeal = analysis.get('overall_appeal', 0.5)
             
-            # Weight aesthetic aspects
+            # Use pre-computed emotional impact score instead of mood_score
+            # This replaces the traditional mood-based scoring with LLM-powered emotional analysis
+            
+            # Weight aesthetic aspects (updated to use single emotional score)
             aesthetic_score = (
-                color_harmony * 0.3 +
-                contrast * 0.2 +
-                saturation * 0.2 +
-                overall_appeal * 0.3
+                color_harmony * 0.30 +
+                contrast * 0.25 +
+                saturation * 0.20 +
+                emotional_impact_score * 0.25  # Use pre-computed emotional impact
             )
             
             return max(0.0, min(1.0, aesthetic_score))

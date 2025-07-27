@@ -32,12 +32,13 @@ class AestheticAnalyzer:
         self.config = config
         self.aesthetic_config = config.get('aesthetic_analysis', {})
     
-    def analyze_aesthetics(self, context) -> Dict:
+    def analyze_aesthetics(self, context, emotional_impact_score=None) -> Dict:
         """
         Perform comprehensive aesthetic analysis.
         
         Args:
             context: AnalysisContext with standardized image data
+            emotional_impact_score: Pre-computed emotional impact score (0.0-1.0) from Vision LLM
             
         Returns:
             Dictionary containing aesthetic analysis results
@@ -57,8 +58,9 @@ class AestheticAnalyzer:
             saturation_analysis = self._analyze_saturation(context)
             results.update(saturation_analysis)
             
-            # Mood and atmosphere
-            mood_analysis = self._analyze_mood(context)
+            # Mood and atmosphere analysis
+            # Use pre-computed emotional impact score if available, otherwise fall back to traditional analysis
+            mood_analysis = self._analyze_mood(context, emotional_impact_score)
             results.update(mood_analysis)
             
             # Overall aesthetic appeal
@@ -514,12 +516,14 @@ class AestheticAnalyzer:
             logger.warning(f"Vibrancy calculation error: {e}")
             return 0.5
     
-    def _analyze_mood(self, context) -> Dict:
+    def _analyze_mood(self, context, emotional_impact_score=None) -> Dict:
         """
         Analyze mood and atmosphere of the image.
+        Uses pre-computed emotional impact score when available, falls back to traditional analysis.
         
         Args:
             context: AnalysisContext with standardized image data
+            emotional_impact_score: Pre-computed emotional impact score from Vision LLM (0.0-1.0)
             
         Returns:
             Dictionary with mood analysis
@@ -541,7 +545,7 @@ class AestheticAnalyzer:
             # Analyze saturation for mood
             mean_saturation = np.mean(hsv[:, :, 1]) / 255.0
             
-            # Determine mood characteristics
+            # Traditional mood analysis based on color properties
             mood_scores = {}
             
             # Bright and cheerful
@@ -574,11 +578,21 @@ class AestheticAnalyzer:
                 mood_scores['subtle'] = 0.8
                 mood_scores['elegant'] = 0.7
             
-            # Calculate overall mood score
-            mood_score = np.mean(list(mood_scores.values())) if mood_scores else 0.5
+            # Calculate traditional mood score
+            traditional_mood_score = np.mean(list(mood_scores.values())) if mood_scores else 0.5
+            
+            # Use pre-computed emotional impact score if available, otherwise fall back to traditional
+            if emotional_impact_score is not None:
+                final_emotional_score = emotional_impact_score
+                logger.debug(f"Using pre-computed emotional impact: {final_emotional_score:.3f}")
+            else:
+                # Fallback to traditional mood analysis
+                final_emotional_score = traditional_mood_score
+                logger.debug(f"Using traditional mood score as fallback: {final_emotional_score:.3f}")
             
             return {
-                'mood_score': float(mood_score),
+                'mood_score': float(final_emotional_score),  # Use single unified score
+                'emotional_impact': float(final_emotional_score),  # For backwards compatibility
                 'mood_characteristics': mood_scores,
                 'brightness_level': float(mean_brightness),
                 'warmth_level': float(warmth),
@@ -589,6 +603,7 @@ class AestheticAnalyzer:
             logger.warning(f"Mood analysis error: {e}")
             return {
                 'mood_score': 0.5,
+                'emotional_impact': 0.5,
                 'mood_characteristics': {},
                 'brightness_level': 0.5,
                 'warmth_level': 0.0,
@@ -598,6 +613,7 @@ class AestheticAnalyzer:
     def _calculate_aesthetic_score(self, analysis: Dict) -> float:
         """
         Calculate overall aesthetic score.
+        Uses unified mood/emotional impact scoring.
         
         Args:
             analysis: Dictionary containing all aesthetic analysis results
@@ -607,18 +623,19 @@ class AestheticAnalyzer:
         """
         try:
             # Weight factors for different aesthetic aspects
+            # Simplified to use single mood/emotional score
             weights = {
                 'color_harmony': 0.30,
                 'contrast': 0.25,
                 'saturation': 0.20,
-                'mood': 0.25
+                'mood': 0.25  # Single unified mood/emotional impact score
             }
             
             # Get individual scores
             color_harmony = analysis.get('color_harmony', 0.5)
             contrast_score = analysis.get('contrast_score', 0.5)
             saturation_score = analysis.get('saturation_score', 0.5)
-            mood_score = analysis.get('mood_score', 0.5)
+            mood_score = analysis.get('mood_score', 0.5)  # This now contains the unified score
             
             # Calculate weighted aesthetic score
             aesthetic_score = (
