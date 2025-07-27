@@ -15,6 +15,9 @@ import uuid
 from datetime import datetime
 from typing import Dict, Optional, Any
 
+# Import security configuration
+from ..config.security import validate_production_environment, get_security_headers, SecurityValidator
+
 from .models import (
     APIResponse, ErrorResponse, SessionInfo, ProcessingRequest,
     BatchProcessingRequest, BatchJobStatus, PreviewUpdate,
@@ -40,17 +43,26 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
     Returns:
         Configured Flask application
     """
+    # Validate security configuration before creating app
+    logger.info("Validating security configuration...")
+    validate_production_environment()
+    
     app = Flask(__name__)
+    
+    # Get security configuration
+    security_validator = SecurityValidator()
+    security_config = security_validator.get_security_config()
     
     # Default configuration
     app.config.update(
-        SECRET_KEY=os.environ.get('PHOTOSIGHT_SECRET_KEY', 'dev-secret-key'),
+        SECRET_KEY=security_config.secret_key,
         MAX_CONTENT_LENGTH=100 * 1024 * 1024,  # 100MB max file size
         UPLOAD_FOLDER=Path('./uploads'),
         OUTPUT_FOLDER=Path('./output'),
         CORS_ORIGINS=['http://localhost:3000', 'http://localhost:5000'],
         SOCKETIO_ASYNC_MODE='threading',
-        API_VERSION='v1'
+        API_VERSION='v1',
+        SECURITY_CONFIG=security_config
     )
     
     # Update with provided config
@@ -61,8 +73,22 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
     app.config['UPLOAD_FOLDER'].mkdir(parents=True, exist_ok=True)
     app.config['OUTPUT_FOLDER'].mkdir(parents=True, exist_ok=True)
     
-    # Initialize CORS
-    CORS(app, origins=app.config['CORS_ORIGINS'])
+    # Initialize CORS with comprehensive security settings
+    cors_config = {
+        'origins': app.config['CORS_ORIGINS'],
+        'methods': ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+        'allow_headers': ['Content-Type', 'Authorization', 'X-Requested-With'],
+        'expose_headers': ['X-RateLimit-Remaining', 'X-RateLimit-Reset'],
+        'supports_credentials': True,
+        'max_age': 86400  # 24 hours for preflight cache
+    }
+    
+    # Restrict CORS in production
+    if security_config.secure_cookies:  # Production environment
+        cors_config['origins'] = [origin for origin in cors_config['origins'] 
+                                 if not origin.startswith('http://localhost')]
+    
+    CORS(app, **cors_config)
     
     # Initialize SocketIO
     socketio = SocketIO(
@@ -71,9 +97,25 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
         async_mode=app.config['SOCKETIO_ASYNC_MODE']
     )
     
-    # Initialize services
+    # Initialize services with enhanced security configuration
     auth = APIAuth(app.config['SECRET_KEY'])
-    rate_limiter = RateLimiter(requests_per_minute=60)
+    
+    # Configure rate limiting based on environment
+    rate_limit_config = {
+        'requests_per_minute': 60,
+        'burst_multiplier': 2,
+        'window_size': 60
+    }
+    
+    # Stricter rate limiting in production
+    if security_config.secure_cookies:  # Production environment
+        rate_limit_config.update({
+            'requests_per_minute': 30,  # More restrictive in production
+            'burst_multiplier': 1.5,
+            'enable_ip_whitelist': True
+        })
+    
+    rate_limiter = RateLimiter(**rate_limit_config)
     session_manager = SessionManager()
     batch_processor = BatchProcessor()
     
@@ -152,25 +194,60 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
         if not session:
             return unauthorized("Invalid or expired token")
         
-        # Check rate limit
-        if not rate_limiter.check_rate_limit(session.user_id):
-            return jsonify(ErrorResponse(
+        # Check rate limit with enhanced headers
+        client_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+        rate_limit_key = f"{session.user_id}:{client_ip}"
+        
+        if not rate_limiter.check_rate_limit(rate_limit_key):
+            remaining = rate_limiter.get_remaining_requests(rate_limit_key)
+            reset_time = rate_limiter.get_reset_time(rate_limit_key)
+            
+            response = jsonify(ErrorResponse(
                 message="Rate limit exceeded",
                 error_code="RATE_LIMIT_EXCEEDED",
                 error_details={
-                    'remaining': rate_limiter.get_remaining_requests(session.user_id)
+                    'remaining': remaining,
+                    'reset_time': reset_time,
+                    'retry_after': 60
                 }
-            ).to_dict()), 429
+            ).to_dict())
+            
+            # Add rate limit headers
+            response.headers['X-RateLimit-Limit'] = str(rate_limit_config['requests_per_minute'])
+            response.headers['X-RateLimit-Remaining'] = str(remaining)
+            response.headers['X-RateLimit-Reset'] = str(reset_time)
+            response.headers['Retry-After'] = '60'
+            
+            return response, 429
         
         # Store session in request context
         request.user_session = session
     
     @app.after_request
     def after_request(response):
-        """Add security headers."""
-        response.headers['X-Content-Type-Options'] = 'nosniff'
-        response.headers['X-Frame-Options'] = 'DENY'
-        response.headers['X-XSS-Protection'] = '1; mode=block'
+        """Add comprehensive security headers and rate limit information."""
+        # Apply all security headers from security config
+        security_headers = get_security_headers()
+        for header, value in security_headers.items():
+            if value:  # Skip empty values (like HSTS in development)
+                response.headers[header] = value
+        
+        # Add rate limit headers for successful requests if user is authenticated
+        if hasattr(request, 'user_session') and request.user_session:
+            client_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+            rate_limit_key = f"{request.user_session.user_id}:{client_ip}"
+            
+            try:
+                remaining = rate_limiter.get_remaining_requests(rate_limit_key)
+                reset_time = rate_limiter.get_reset_time(rate_limit_key)
+                
+                response.headers['X-RateLimit-Limit'] = str(rate_limit_config['requests_per_minute'])
+                response.headers['X-RateLimit-Remaining'] = str(remaining)
+                response.headers['X-RateLimit-Reset'] = str(reset_time)
+            except Exception:
+                # Don't fail the request if rate limit headers can't be added
+                pass
+        
         return response
     
     # Health check endpoint

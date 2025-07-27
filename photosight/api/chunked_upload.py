@@ -17,6 +17,7 @@ import redis
 
 from .auth import require_auth
 from .models_pydantic import ErrorResponse, APIResponse
+from ..config.security import check_file_upload_security
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +57,16 @@ class ChunkedUploadHandler:
         Returns:
             Upload session ID
         """
+        # Additional security: validate filename again
+        secure_name = secure_filename(filename)
+        if not secure_name or secure_name != filename:
+            logger.warning(f"Filename was sanitized: '{filename}' -> '{secure_name}'")
+            filename = secure_name
+        
         upload_id = str(uuid.uuid4())
         session_data = {
             'upload_id': upload_id,
-            'filename': secure_filename(filename),
+            'filename': filename,
             'total_size': total_size,
             'total_chunks': total_chunks,
             'uploaded_chunks': [],
@@ -68,9 +75,9 @@ class ChunkedUploadHandler:
             'status': 'active'
         }
         
-        # Create upload directory
+        # Create upload directory with secure permissions
         upload_path = self.chunks_dir / upload_id
-        upload_path.mkdir(exist_ok=True)
+        upload_path.mkdir(mode=0o750, exist_ok=True)  # Restricted permissions
         
         # Store session in Redis
         redis_client.setex(
@@ -155,16 +162,30 @@ class ChunkedUploadHandler:
             missing = set(range(session_data['total_chunks'])) - set(session_data['uploaded_chunks'])
             raise ValueError(f"Missing chunks: {sorted(missing)}")
         
-        # Assemble file
-        final_path = self.upload_dir / f"{upload_id}_{session_data['filename']}"
+        # Assemble file with secure path and permissions
+        safe_filename = secure_filename(session_data['filename'])
+        final_path = self.upload_dir / f"{upload_id}_{safe_filename}"
+        
+        # Ensure we're writing within the upload directory (prevent path traversal)
+        if not str(final_path.resolve()).startswith(str(self.upload_dir.resolve())):
+            raise ValueError("Invalid file path detected")
+        
         hasher = hashlib.sha256()
         
         with open(final_path, 'wb') as output:
             for i in range(session_data['total_chunks']):
                 chunk_path = self.chunks_dir / upload_id / f"chunk_{i:06d}"
+                
+                # Validate chunk path (prevent directory traversal)
+                if not str(chunk_path.resolve()).startswith(str(self.chunks_dir.resolve())):
+                    raise ValueError(f"Invalid chunk path detected: {chunk_path}")
+                
                 chunk_data = chunk_path.read_bytes()
                 output.write(chunk_data)
                 hasher.update(chunk_data)
+        
+        # Set secure permissions on final file
+        os.chmod(final_path, 0o640)  # Owner read/write, group read only
         
         file_hash = hasher.hexdigest()
         
@@ -289,14 +310,26 @@ def init_chunked_upload():
                 message="filename, total_size, and total_chunks are required"
             ).dict()), 400
         
-        # Validate file extension
-        allowed_extensions = {'.cr2', '.nef', '.arw', '.dng', '.orf', '.rw2', '.raf'}
-        ext = Path(filename).suffix.lower()
-        if ext not in allowed_extensions:
+        # Perform comprehensive file upload security check
+        security_check = check_file_upload_security(
+            filename=filename,
+            content_type=request.headers.get('Content-Type', 'application/octet-stream'),
+            file_size=total_size
+        )
+        
+        if not security_check['valid']:
             return jsonify(ErrorResponse(
-                error="invalid_file_type",
-                message=f"Unsupported file type: {ext}"
+                error="security_validation_failed",
+                message="File upload security validation failed",
+                details=security_check['issues']
             ).dict()), 400
+        
+        # Log security warnings if any
+        if security_check['warnings']:
+            logger.warning(f"File upload warnings for {filename}: {security_check['warnings']}")
+        
+        # Use sanitized filename
+        filename = security_check['sanitized_filename']
         
         upload_id = upload_handler.init_upload(
             filename=filename,

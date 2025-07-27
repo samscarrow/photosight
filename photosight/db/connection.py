@@ -11,7 +11,7 @@ from typing import Optional, Dict, Any
 from contextlib import contextmanager
 from sqlalchemy import create_engine, Engine, event, text
 from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.pool import QueuePool
+from sqlalchemy.pool import QueuePool, StaticPool
 from .models import Base
 from .dual_database_manager import get_dual_database_manager
 
@@ -25,7 +25,7 @@ _session_factory: Optional[sessionmaker] = None
 
 def configure_database(config: Dict[str, Any]) -> None:
     """
-    Configure database connection using dual database architecture.
+    Configure database connection using dual database architecture with optimized connection pooling.
     
     Args:
         config: PhotoSight configuration dictionary
@@ -39,12 +39,13 @@ def configure_database(config: Dict[str, Any]) -> None:
         return
     
     try:
-        # Initialize dual database manager
-        _dual_manager = get_dual_database_manager()
+        # Initialize dual database manager with connection pooling configuration
+        pool_config = db_config.get('connection_pool', {})
+        _dual_manager = get_dual_database_manager(pool_config=pool_config)
         
         # For backward compatibility, set up legacy connection to PhotoSight schema
         with _dual_manager.get_projects_connection('photosight') as conn:
-            # Test connection
+            # Test connection and verify pooling is working
             conn.execute(text("SELECT 1"))
         
         # Create legacy engine reference for compatibility
@@ -53,6 +54,7 @@ def configure_database(config: Dict[str, Any]) -> None:
         
         logger.info("Dual database architecture configured successfully")
         logger.info("PhotoSight using Projects Database - PHOTOSIGHT schema")
+        logger.info(f"Connection pool configuration: {_get_pool_info(_engine)}")
         
         # Auto-initialize if configured
         if db_config.get('auto_init', True):
@@ -188,12 +190,90 @@ def is_database_available() -> bool:
         return False
 
 
-# Connection event listeners for better debugging
+def get_connection_pool_status() -> Dict[str, Any]:
+    """
+    Get current connection pool status for monitoring.
+    
+    Returns:
+        Dictionary with pool statistics
+    """
+    if not _engine or not hasattr(_engine.pool, 'status'):
+        return {'status': 'unavailable', 'message': 'No engine or pool available'}
+    
+    pool = _engine.pool
+    
+    # Different pool types have different attributes
+    if hasattr(pool, 'size'):
+        # QueuePool attributes
+        return {
+            'pool_type': pool.__class__.__name__,
+            'size': getattr(pool, 'size', lambda: 'unknown')(),
+            'checked_in': getattr(pool, 'checkedin', lambda: 'unknown')(),
+            'checked_out': getattr(pool, 'checkedout', lambda: 'unknown')(),
+            'overflow': getattr(pool, 'overflow', lambda: 'unknown')(),
+            'invalid': getattr(pool, 'invalidated', lambda: 'unknown')()
+        }
+    else:
+        return {
+            'pool_type': pool.__class__.__name__,
+            'status': 'available'
+        }
+
+
+def _get_pool_info(engine: Engine) -> str:
+    """
+    Get human-readable pool configuration info.
+    
+    Args:
+        engine: SQLAlchemy engine
+        
+    Returns:
+        String describing pool configuration
+    """
+    if not engine:
+        return "No engine available"
+    
+    pool = engine.pool
+    pool_type = pool.__class__.__name__
+    
+    if hasattr(pool, '_pool_size'):
+        return f"{pool_type} (size: {pool._pool_size}, max_overflow: {getattr(pool, '_max_overflow', 'N/A')})"
+    else:
+        return f"{pool_type}"
+
+
+# Connection event listeners for better debugging and optimization
 @event.listens_for(Engine, "connect")
-def set_sqlite_pragma(dbapi_connection, connection_record):
-    """Set database-specific optimizations."""
-    # This is primarily for PostgreSQL, but can be extended for other databases
-    pass
+def set_database_optimizations(dbapi_connection, connection_record):
+    """Set database-specific optimizations and security settings."""
+    cursor = dbapi_connection.cursor()
+    
+    # PostgreSQL-specific optimizations
+    if hasattr(dbapi_connection, 'server_version'):
+        try:
+            # Set connection-level optimizations for PostgreSQL
+            cursor.execute("SET statement_timeout = '30s'")  # Prevent runaway queries
+            cursor.execute("SET lock_timeout = '10s'")       # Prevent deadlocks
+            cursor.execute("SET idle_in_transaction_session_timeout = '60s'")  # Clean up idle transactions
+        except Exception as e:
+            logger.debug(f"Could not set PostgreSQL optimizations: {e}")
+    
+    cursor.close()
+
+
+@event.listens_for(Engine, "checkout")
+def receive_checkout(dbapi_connection, connection_record, connection_proxy):
+    """Log connection checkout for pool monitoring."""
+    if logger.isEnabledFor(logging.DEBUG):
+        pool = connection_proxy._pool
+        logger.debug(f"Connection checked out from pool. Pool size: {getattr(pool, 'size', lambda: 'unknown')()}")
+
+
+@event.listens_for(Engine, "checkin")
+def receive_checkin(dbapi_connection, connection_record):
+    """Log connection checkin for pool monitoring."""
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("Connection checked back into pool")
 
 
 @event.listens_for(Engine, "begin")
