@@ -231,10 +231,13 @@ class QualityRanker:
                         is_decisive_moment = parsed.get('is_decisive_moment', False)
                         decisive_moment_score = parsed.get('decisive_moment_score', 0.0)
                         
-                        # Apply decisive moment bonus
-                        if is_decisive_moment and decisive_moment_score > 0.7:
-                            overall_score *= self.decisive_moment_bonus
-                            logger.debug(f"Applied decisive moment bonus ({self.decisive_moment_bonus}x) to {photo_path.name}")
+                        # Apply sophisticated decisive moment bonus based on confidence
+                        moment_multiplier = self._calculate_decisive_moment_multiplier(
+                            is_decisive_moment, decisive_moment_score
+                        )
+                        if moment_multiplier > 1.0:
+                            overall_score *= moment_multiplier
+                            logger.debug(f"Applied decisive moment bonus ({moment_multiplier:.3f}x, confidence: {decisive_moment_score:.2f}) to {photo_path.name}")
                         
                         # Store decisive moment info for later use
                         scores['is_decisive_moment'] = is_decisive_moment
@@ -309,6 +312,75 @@ class QualityRanker:
             weights['face'] = 0.0
         
         return weights
+    
+    def _calculate_decisive_moment_multiplier(self, is_decisive_moment: bool, confidence_score: float) -> float:
+        """
+        Calculate sophisticated decisive moment multiplier based on confidence.
+        
+        Uses a sliding scale that rewards high-confidence detections more heavily
+        while still providing some benefit to lower-confidence moments that might
+        be subtly important.
+        
+        Args:
+            is_decisive_moment: Boolean flag from vision analysis
+            confidence_score: Confidence score (0.0-1.0) from vision analysis
+            
+        Returns:
+            Multiplier value (1.0 = no bonus, >1.0 = bonus applied)
+        """
+        if not is_decisive_moment or confidence_score <= 0.0:
+            return 1.0
+        
+        # Configuration for decisive moment scoring
+        config = self.ranking_config.get('decisive_moment', {})
+        
+        # Base bonus range (default: 1.0 to 1.25, i.e., 0% to 25% bonus)
+        min_bonus = config.get('min_bonus', 1.0)
+        max_bonus = config.get('max_bonus', self.decisive_moment_bonus)
+        
+        # Confidence thresholds for different bonus levels
+        confidence_curve = config.get('confidence_curve', 'exponential')  # 'linear', 'exponential', 'sigmoid'
+        min_confidence = config.get('min_confidence', 0.3)  # Start applying bonus at 30% confidence
+        
+        # Clamp confidence to valid range
+        confidence = max(min_confidence, min(1.0, confidence_score))
+        
+        # Normalize confidence to 0-1 range for bonus calculation
+        normalized_confidence = (confidence - min_confidence) / (1.0 - min_confidence)
+        
+        # Apply different curves based on configuration
+        if confidence_curve == 'exponential':
+            # Exponential curve: rewards very high confidence heavily
+            # f(x) = x^2 gives more weight to high confidence
+            curve_factor = normalized_confidence ** 2
+        elif confidence_curve == 'sigmoid':
+            # Sigmoid curve: smooth S-curve that's conservative at extremes
+            import math
+            curve_factor = 1 / (1 + math.exp(-6 * (normalized_confidence - 0.5)))
+        else:  # linear (default)
+            # Linear curve: proportional bonus
+            curve_factor = normalized_confidence
+        
+        # Calculate final multiplier
+        bonus_range = max_bonus - min_bonus
+        multiplier = min_bonus + (bonus_range * curve_factor)
+        
+        # Additional context-based adjustments
+        # Higher bonuses for photos with multiple indicators of importance
+        context_bonus = 1.0
+        if confidence_score > 0.8:  # Very high confidence
+            context_bonus *= 1.1
+        if confidence_score > 0.9:  # Extremely high confidence
+            context_bonus *= 1.05
+            
+        final_multiplier = multiplier * context_bonus
+        
+        logger.debug(f"Decisive moment calculation: confidence={confidence_score:.3f}, "
+                    f"normalized={normalized_confidence:.3f}, curve_factor={curve_factor:.3f}, "
+                    f"base_multiplier={multiplier:.3f}, context_bonus={context_bonus:.3f}, "
+                    f"final={final_multiplier:.3f}")
+        
+        return min(final_multiplier, config.get('max_total_bonus', 1.5))  # Cap at 50% bonus
     
     def rank_photos_batch(self, photo_paths: List[Union[str, Path]], 
                          progress_callback: Optional[callable] = None) -> List[Tuple[Path, float]]:

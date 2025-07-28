@@ -188,7 +188,24 @@ Format as JSON with keys: technical_quality, artistic_merit, story_impact, stand
 
 Rate the decisive moment quality from 0.0 (not a decisive moment) to 1.0 (perfect decisive moment).
 
-Format as JSON with keys: is_decisive_moment (boolean), decisive_moment_score (0.0-1.0), peak_action_captured (boolean), emotional_impact_level (0.0-1.0), temporal_uniqueness (0.0-1.0), visual_impact (0.0-1.0), moment_description (string), improvement_suggestions (string)"""
+**Confidence Scoring Guidelines:**
+- 0.0-0.3: Not a decisive moment (static, posed, or compositionally weak)
+- 0.3-0.5: Subtle decisive moment (minor gesture, mild emotion, some temporal value)
+- 0.5-0.7: Clear decisive moment (good timing, moderate emotional impact)  
+- 0.7-0.9: Strong decisive moment (excellent timing, high emotional impact, unique)
+- 0.9-1.0: Perfect decisive moment (extraordinary timing, powerful emotion, unrepeatable)
+
+**Multi-Factor Confidence Assessment:**
+Base the confidence score on the combined strength of:
+1. Timing precision (how exact is the captured instant?)
+2. Emotional authenticity (how genuine and powerful?)
+3. Visual impact (how immediately compelling?)
+4. Uniqueness factor (how irreplaceable is this moment?)
+5. Compositional support (how well does composition enhance the moment?)
+
+Be precise with decimal scoring - use the full 0.0-1.0 range to reflect subtle differences in moment quality.
+
+Format as JSON with keys: is_decisive_moment (boolean), decisive_moment_score (0.0-1.0), confidence_factors (object with timing_precision, emotional_authenticity, visual_impact, uniqueness_factor, compositional_support as 0.0-1.0 values), peak_action_captured (boolean), emotional_impact_level (0.0-1.0), temporal_uniqueness (0.0-1.0), visual_impact (0.0-1.0), moment_description (string), improvement_suggestions (string)"""
     
     CROP_SUGGESTIONS = """Suggest optimal crops for this image:
 1. Identify the main subject(s)

@@ -121,6 +121,72 @@ ai_curation:
     face_weight: 0.2         # Face quality and expression
     person_weight: 0.1       # Person detection and pose
 
+# Enhanced quality ranking with emotional weighting
+ranking:
+  weights:
+    technical: 0.3      # Base technical quality weight
+    composition: 0.25   # Base composition weight
+    aesthetic: 0.25     # Base aesthetic appeal weight
+    subject: 0.2        # Base subject quality weight
+  
+  # Dynamic emotional weighting (multipliers applied to base weights)
+  emotional_weights:
+    joy: 
+      aesthetic: 1.4    # Joy enhances aesthetic appreciation
+      face: 1.2         # Joyful expressions are more valuable
+    excitement:
+      aesthetic: 1.3    # Excitement creates visual energy
+      subject: 1.2      # Dynamic subjects more important
+    engagement:
+      subject: 1.3      # Engaged subjects are key
+      composition: 1.1  # Composition supports engagement
+    focus:
+      technical: 1.2    # Technical precision matters more
+      subject: 1.1      # Clear subject focus
+    inspiration:
+      aesthetic: 1.5    # Inspirational moments are highly aesthetic
+      composition: 1.2  # Strong composition amplifies inspiration
+    breakthrough:
+      aesthetic: 1.3    # Breakthrough moments are beautiful
+      subject: 1.4      # Subject expression is critical
+    insight:
+      subject: 1.2      # Subject realization is key
+      composition: 1.1  # Good framing helps convey insight
+  
+  # Scene-specific weight adjustments
+  scene_weights:
+    portrait:
+      face: 1.5         # Face quality critical in portraits
+      subject: 1.3      # Subject prominence important
+      technical: 1.1    # Technical quality supports portraits
+    presentation:
+      subject: 1.4      # Speaker is the focus
+      composition: 1.2  # Good framing important
+    "workshop/discussion":
+      subject: 1.2      # People interactions matter
+      aesthetic: 1.1    # Pleasing overall look
+    networking:
+      face: 1.3         # Facial expressions important
+      subject: 1.2      # People are the subjects
+    group:
+      composition: 1.4  # Composition critical for groups
+      subject: 1.2      # Multiple subjects to manage
+  
+  # Refined decisive moment algorithm
+  decisive_moment:
+    min_confidence: 0.3         # Start applying bonus at 30% confidence
+    confidence_curve: exponential  # Reward high confidence heavily (linear, exponential, sigmoid)
+    min_bonus: 1.0              # No bonus at minimum confidence
+    max_bonus: 1.25             # 25% bonus at base maximum confidence  
+    max_total_bonus: 1.5        # Safety cap at 50% total bonus
+    
+    # Confidence scoring guidelines (for Vision LLM reference):
+    # 0.0-0.3: Not a decisive moment (static, posed, weak)
+    # 0.3-0.5: Subtle decisive moment (minor timing value)
+    # 0.5-0.7: Clear decisive moment (good timing, moderate impact)
+    # 0.7-0.9: Strong decisive moment (excellent timing, high impact)
+    # 0.9-1.0: Perfect decisive moment (extraordinary, unrepeatable)
+
 # Output settings
 output:
   create_folders: true

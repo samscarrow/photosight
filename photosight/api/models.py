@@ -4,7 +4,7 @@ API Data Models and Schemas
 Defines request/response models for the PhotoSight API.
 """
 
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Union, Tuple
 from datetime import datetime
 from dataclasses import dataclass, field
 from enum import Enum
